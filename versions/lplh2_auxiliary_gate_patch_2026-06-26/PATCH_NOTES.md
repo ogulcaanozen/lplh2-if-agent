@@ -44,6 +44,13 @@ conservatively:
 
 This preserves the previous behavior when the new gate is unavailable.
 
+## Follow-Up Polish
+
+- Initialized the auxiliary gate debug fields in `LLMClient.__init__`.
+- Added a dedicated per-experiment `auxiliary_gate_log.txt` with the gate
+  prompt, raw response, parsed decision, fallback status, and environmental
+  change detail for each step where the gate runs.
+
 ## Verification
 
 The patched snapshot was syntax-checked locally with:

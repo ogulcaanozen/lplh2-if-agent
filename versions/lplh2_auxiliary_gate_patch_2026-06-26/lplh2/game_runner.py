@@ -53,6 +53,7 @@ class GameRunner:
         self._affordance_log_file = None
         self._action_failure_log_file = None
         self._action_generation_log_file = None
+        self._auxiliary_gate_log_file = None
         self._run_timestamp = None
         self._experiment_log_dir = None
         self._run_log_path = None
@@ -61,6 +62,7 @@ class GameRunner:
         self._affordance_log_path = None
         self._action_failure_log_path = None
         self._action_generation_log_path = None
+        self._auxiliary_gate_log_path = None
         self._results_path = None
         self._step_log_path = None
         self._all_step_logs = []
@@ -91,12 +93,14 @@ class GameRunner:
         affordance_log_path = os.path.join(self._experiment_log_dir, "affordance_brainstorm_log.txt")
         action_failure_log_path = os.path.join(self._experiment_log_dir, "action_failure_memory_log.txt")
         action_generation_log_path = os.path.join(self._experiment_log_dir, "action_generation_log.txt")
+        auxiliary_gate_log_path = os.path.join(self._experiment_log_dir, "auxiliary_gate_log.txt")
         self._run_log_path = log_path
         self._summary_log_path = summary_log_path
         self._situation_log_path = situation_log_path
         self._affordance_log_path = affordance_log_path
         self._action_failure_log_path = action_failure_log_path
         self._action_generation_log_path = action_generation_log_path
+        self._auxiliary_gate_log_path = auxiliary_gate_log_path
         self._step_log_path = os.path.join(self._experiment_log_dir, "steplog.json")
         self._log_file = open(log_path, "w", encoding="utf-8", buffering=1)
         self._summary_log_file = open(summary_log_path, "w", encoding="utf-8", buffering=1)
@@ -107,6 +111,9 @@ class GameRunner:
         )
         self._action_generation_log_file = open(
             action_generation_log_path, "w", encoding="utf-8", buffering=1
+        )
+        self._auxiliary_gate_log_file = open(
+            auxiliary_gate_log_path, "w", encoding="utf-8", buffering=1
         )
         self._log_file.write(f"LPLH Run Log — {game_name}\n")
         self._log_file.write(
@@ -146,6 +153,12 @@ class GameRunner:
             f"LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL}\n"
         )
         self._action_generation_log_file.write("=" * 70 + "\n")
+        self._auxiliary_gate_log_file.write(f"LPLH2 Auxiliary Gate Log - {game_name}\n")
+        self._auxiliary_gate_log_file.write(
+            f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
+            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+        )
+        self._auxiliary_gate_log_file.write("=" * 70 + "\n")
         print(f"Experiment log dir: {self._experiment_log_dir}")
         print(f"Run log: {log_path}")
         print(f"Summary module log: {summary_log_path}")
@@ -153,6 +166,7 @@ class GameRunner:
         print(f"Affordance brainstorm log: {affordance_log_path}")
         print(f"Action failure memory log: {action_failure_log_path}")
         print(f"Action generation log: {action_generation_log_path}")
+        print(f"Auxiliary gate log: {auxiliary_gate_log_path}")
 
         # Initialize LPLH agent
         llm = LLMClient()
@@ -283,6 +297,9 @@ class GameRunner:
             if self._action_generation_log_file:
                 self._action_generation_log_file.close()
                 self._action_generation_log_file = None
+            if self._auxiliary_gate_log_file:
+                self._auxiliary_gate_log_file.close()
+                self._auxiliary_gate_log_file = None
             elapsed = time.time() - start_time
             logs_for_save = self._logs_for_save()
 
@@ -312,6 +329,7 @@ class GameRunner:
             print(f"  Affordance log: {self._affordance_log_path}")
             print(f"  Action failure log: {self._action_failure_log_path}")
             print(f"  Action generation log: {self._action_generation_log_path}")
+            print(f"  Auxiliary gate log: {self._auxiliary_gate_log_path}")
             print(f"  Step log: {self._step_log_path}")
             print(f"  Results: {self._results_path}")
             print(f"  Total Time: {elapsed:.1f}s")
@@ -352,6 +370,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
+            "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "step_log_path": self._step_log_path,
         }
 
@@ -727,6 +746,7 @@ class GameRunner:
         self._log_file.write("\n".join(lines) + "\n")
         self._log_summary_module_step(epoch, step, d)
         self._log_situation_memory_step(epoch, step, d)
+        self._log_auxiliary_gate_step(epoch, step, d)
         self._log_affordance_brainstorm_step(epoch, step, d)
         self._log_action_failure_memory_step(epoch, step, d)
         self._log_action_generation_step(epoch, step, d)
@@ -829,6 +849,62 @@ class GameRunner:
             json.dumps(entry.get("active_situations_after", []), indent=2, ensure_ascii=False)
         )
         self._situation_log_file.write("\n" + "=" * 90 + "\n")
+
+    def _log_auxiliary_gate_step(self, epoch: int, step: int, detail: dict):
+        """Write the auxiliary gate prompt/response and routing decision."""
+        if not self._auxiliary_gate_log_file:
+            return
+
+        modules = detail.get("modules", {})
+        entry = modules.get("auxiliary_gate", {})
+        if not entry:
+            return
+
+        decision = entry.get("decision", {})
+        metadata = {
+            "step": detail.get("step"),
+            "action": detail.get("executed_action") or detail.get("prev_action"),
+            "location": entry.get("location"),
+            "previous_location": entry.get("previous_location"),
+            "status": entry.get("status"),
+            "action_valid": entry.get("action_valid"),
+            "reward_change": entry.get("reward_change"),
+            "cached_affordance_ideas_available": entry.get("cached_affordance_ideas_available"),
+            "use_legacy_environmental_detection": entry.get("use_legacy_environmental_detection"),
+        }
+
+        self._auxiliary_gate_log_file.write("\n" + "=" * 90 + "\n")
+        self._auxiliary_gate_log_file.write(
+            f"[EPOCH {epoch} | STEP {step:03d}] "
+            f"status: {entry.get('status', 'missing')}\n"
+        )
+        self._auxiliary_gate_log_file.write("-" * 90 + "\n")
+        self._auxiliary_gate_log_file.write("metadata:\n")
+        self._auxiliary_gate_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
+        self._auxiliary_gate_log_file.write("\n\nobservation:\n")
+        self._auxiliary_gate_log_file.write(str(entry.get("observation", "")))
+        self._auxiliary_gate_log_file.write("\n\nprompt:\n")
+        self._auxiliary_gate_log_file.write(str(entry.get("prompt", "")))
+        self._auxiliary_gate_log_file.write("\n\nllm response:\n")
+        self._auxiliary_gate_log_file.write(str(entry.get("llm_raw_response", "")))
+        self._auxiliary_gate_log_file.write("\n\nfinish reason:\n")
+        self._auxiliary_gate_log_file.write(str(entry.get("finish_reason", "")))
+        self._auxiliary_gate_log_file.write("\n\nresponse body:\n")
+        self._auxiliary_gate_log_file.write(str(entry.get("response_body", "")))
+        self._auxiliary_gate_log_file.write("\n\ndecision:\n")
+        self._auxiliary_gate_log_file.write(json.dumps(decision, indent=2, ensure_ascii=False))
+        self._auxiliary_gate_log_file.write("\n\nenvironmental change detail:\n")
+        self._auxiliary_gate_log_file.write(
+            json.dumps(
+                entry.get("environmental_change_detection", {}),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        if entry.get("error"):
+            self._auxiliary_gate_log_file.write("\n\nerror:\n")
+            self._auxiliary_gate_log_file.write(str(entry.get("error")))
+        self._auxiliary_gate_log_file.write("\n" + "=" * 90 + "\n")
 
     def _log_affordance_brainstorm_step(self, epoch: int, step: int, detail: dict):
         """Write the affordance brainstorm prompt/response for every generated action."""
@@ -1091,6 +1167,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
+            "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "step_log_path": self._step_log_path,
             "elapsed_seconds": elapsed,
             "timestamp": datetime.now().isoformat(),
@@ -1110,6 +1187,7 @@ class GameRunner:
         results["affordance_log_path"] = self._affordance_log_path
         results["action_failure_log_path"] = self._action_failure_log_path
         results["action_generation_log_path"] = self._action_generation_log_path
+        results["auxiliary_gate_log_path"] = self._auxiliary_gate_log_path
         results["step_log_path"] = self._step_log_path
         results["results_path"] = self._results_path
 
@@ -1138,6 +1216,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
+            "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "results_path": self._results_path,
             "epochs": all_step_logs,
         }

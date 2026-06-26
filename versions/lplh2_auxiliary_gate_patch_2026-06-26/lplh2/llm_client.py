@@ -102,6 +102,9 @@ class LLMClient:
         self.last_repetition_eval_prompt = None
         self.last_repetition_eval_raw_response = None
         self.last_repetition_eval_finish_reason = None
+        self.last_auxiliary_gate_prompt = None
+        self.last_auxiliary_gate_raw_response = None
+        self.last_auxiliary_gate_finish_reason = None
 
         # qwen3 thinking-mode probe (Ollama only — qwen2.5 has no such mode)
         self._thinking_supported = self._probe_thinking_support()
