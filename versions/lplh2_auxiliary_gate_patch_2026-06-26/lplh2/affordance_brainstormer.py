@@ -474,15 +474,18 @@ class AffordanceBrainstormer:
                                 tried_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not tried_entries:
             return []
+        pending_keys = {self._command_key(item) for item in pending_commands}
         pending_tokens = self._command_tokens(pending_commands)
+        pending_heads = self._command_head_tokens(pending_commands)
         matches: list[dict[str, Any]] = []
         for entry in tried_entries:
             command = entry.get("command", "")
             command_key = self._command_key(command)
-            command_tokens = set(self._normalize(command).split())
-            if command_key in {self._command_key(item) for item in pending_commands}:
+            command_tokens = self._command_tokens([command])
+            overlap = pending_tokens.intersection(command_tokens)
+            if command_key in pending_keys:
                 matches.append(entry)
-            elif pending_tokens and command_tokens and pending_tokens.intersection(command_tokens):
+            elif overlap and overlap.intersection(pending_heads):
                 matches.append(entry)
         return matches[:6]
 
@@ -490,6 +493,9 @@ class AffordanceBrainstormer:
         tokens: set[str] = set()
         stop = {
             "the", "a", "an", "to", "at", "in", "on", "with", "from",
+            "under", "over", "behind", "around", "near", "into", "onto", "off",
+            "out", "through", "inside", "outside", "beneath", "below", "above",
+            "across", "against", "beside", "between",
             "look", "examine", "search", "take", "get", "open", "close",
             "move", "use", "read", "climb", "shake", "turn", "light",
             "switch", "push", "pull", "lift", "attack", "kill", "hit",
@@ -500,6 +506,19 @@ class AffordanceBrainstormer:
                 if token and token not in stop:
                     tokens.add(token)
         return tokens
+
+    def _command_head_tokens(self, commands: list[str]) -> set[str]:
+        """Return the last meaningful token for each command as an object anchor."""
+        heads: set[str] = set()
+        for command in commands or []:
+            meaningful = []
+            command_tokens = self._command_tokens([command])
+            for token in self._normalize(command).split():
+                if token in command_tokens:
+                    meaningful.append(token)
+            if meaningful:
+                heads.add(meaningful[-1])
+        return heads
 
     def _dedupe_commands(self, commands: list[str]) -> list[str]:
         output: list[str] = []
