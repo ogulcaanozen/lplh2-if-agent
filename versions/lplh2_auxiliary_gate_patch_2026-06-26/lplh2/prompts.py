@@ -430,14 +430,26 @@ selected auxiliary mechanisms deserve to run after the latest completed action.
 
 Make exactly these decisions:
 
-1. Environmental change detection
-   - Set "changed": true only when the latest valid non-navigation action appears
+1. Summary trigger decisions
+   These decide whether the summary module should try to create a concrete,
+   reusable memory for this step. Set "run": true only when the observation
+   contains a confirmed fact worth remembering. Set false for parser errors,
+   repeated descriptions, ordinary failed commands, or vague speculation.
+
+   - "navigation": true when the observation confirms useful spatial knowledge:
+     a new/current location, a route from the previous location, exits, blocked
+     directions, reachable areas, or a room/object placement fact tied to place.
+     This is especially likely when Current Location differs from Previous
+     Location or when Current Location was not in Rooms Visited Before This Step.
+   - "environmental": true when the latest valid non-navigation action appears
      to have directly changed world/object state, revealed a state transition, or
-     caused a durable effect.
-   - Use false for parser errors, invalid commands, ordinary movement to a new
-     location, repeated descriptions, or purely informational narration.
-   - If the score changed because of the action, prefer true unless the evidence
-     says the score came from ending/administrative text.
+     caused a durable effect. If the score changed because of the action, prefer
+     true unless the evidence says the score came from ending/administrative
+     text.
+   - "narrative": true when the observation gives reusable information without
+     necessarily changing world state: readable text, a clue, warning,
+     instruction, object property, game rule, or important fact learned from
+     examining/listening/talking/reading.
 
 2. Stored situation detection
    - Set "run": true when the latest observation may contain a new unresolved
@@ -462,9 +474,19 @@ Return JSON only between |start| and |end|:
 
 |start|
 {{
-  "environmental_change": {{
-    "changed": true or false,
-    "evidence": "short observation-based reason"
+  "summary_triggers": {{
+    "navigation": {{
+      "run": true or false,
+      "evidence": "short observation-based reason"
+    }},
+    "environmental": {{
+      "run": true or false,
+      "evidence": "short observation-based reason"
+    }},
+    "narrative": {{
+      "run": true or false,
+      "evidence": "short observation-based reason"
+    }}
   }},
   "stored_situation_detection": {{
     "run": true or false,
@@ -488,6 +510,7 @@ Action Validity From FM: {action_valid}
 Observation After Action: {observation}
 Current Score: {score}
 Reward Change: {reward_change}
+Rooms Visited Before This Step: {rooms_visited_before}
 Current Inventory: {inventory}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}

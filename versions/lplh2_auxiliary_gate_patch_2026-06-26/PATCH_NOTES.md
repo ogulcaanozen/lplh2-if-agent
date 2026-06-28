@@ -24,7 +24,9 @@ modules should run after a completed step.
 - Added `AUXILIARY_MODULE_GATE_PROMPT` in `lplh2/prompts.py`.
 - Added `LLMClient.gate_auxiliary_modules(...)` in `lplh2/llm_client.py`.
 - Added agent-side parsing, fallback, and routing in `lplh2/agent.py`.
-- Environmental change status is now supplied by the gate when the gate succeeds.
+- Navigation, environmental, and narrative neutral-summary triggers are now
+  supplied by the gate when the gate succeeds.
+- Environmental change status is also supplied by the gate when the gate succeeds.
 - Stored situation detection is skipped when the gate says there is no likely
   new future-return situation.
 - Affordance brainstorming runs fresh only when the gate says it is useful.
@@ -50,6 +52,9 @@ This preserves the previous behavior when the new gate is unavailable.
 - Added a dedicated per-experiment `auxiliary_gate_log.txt` with the gate
   prompt, raw response, parsed decision, fallback status, and environmental
   change detail for each step where the gate runs.
+- Extended the gate response with a `summary_triggers` section so
+  `navigation`, `environmental`, and `narrative` summaries are LLM-routed.
+  The old local summary-trigger checks remain only as a gate-failure fallback.
 
 ## Verification
 

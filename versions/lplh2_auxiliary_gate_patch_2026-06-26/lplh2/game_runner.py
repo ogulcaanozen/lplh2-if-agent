@@ -869,8 +869,12 @@ class GameRunner:
             "status": entry.get("status"),
             "action_valid": entry.get("action_valid"),
             "reward_change": entry.get("reward_change"),
+            "rooms_visited_before": entry.get("rooms_visited_before"),
             "cached_affordance_ideas_available": entry.get("cached_affordance_ideas_available"),
             "use_legacy_environmental_detection": entry.get("use_legacy_environmental_detection"),
+            "use_legacy_summary_trigger_detection": entry.get(
+                "use_legacy_summary_trigger_detection"
+            ),
         }
 
         self._auxiliary_gate_log_file.write("\n" + "=" * 90 + "\n")

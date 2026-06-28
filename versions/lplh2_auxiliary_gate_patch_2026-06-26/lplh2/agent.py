@@ -238,6 +238,7 @@ class LPLHAgent:
             reward_change=reward_change,
             action_valid=action_valid,
             prev_location=prev_location,
+            visited_rooms_before=visited_rooms_before,
         )
         detail["modules"]["auxiliary_gate"] = auxiliary_gate
 
@@ -334,6 +335,7 @@ class LPLHAgent:
                 visited_rooms_before=visited_rooms_before,
                 prev_location=prev_location,
                 environmental_change=environmental_change_detection,
+                auxiliary_gate=auxiliary_gate,
             )
             for trigger_type, trigger_meta in neutral_triggers:
                 try:
@@ -376,6 +378,8 @@ class LPLHAgent:
                                 "location": self.kg_map.current_location or "unknown",
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
+                                "gate_reason": trigger_meta.get("gate_reason", ""),
+                                "gate_evidence": trigger_meta.get("gate_evidence", ""),
                                 "step": self.step_count,
                                 "score": score,
                                 "status": "summary_none",
@@ -415,6 +419,8 @@ class LPLHAgent:
                                 "location": self.kg_map.current_location or "unknown",
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
+                                "gate_reason": trigger_meta.get("gate_reason", ""),
+                                "gate_evidence": trigger_meta.get("gate_evidence", ""),
                                 "step": self.step_count,
                                 "score": score,
                             },
@@ -437,6 +443,8 @@ class LPLHAgent:
                                 "location": self.kg_map.current_location or "unknown",
                                 "action": completed_action,
                                 "event_key": event_key,
+                                "gate_reason": trigger_meta.get("gate_reason", ""),
+                                "gate_evidence": trigger_meta.get("gate_evidence", ""),
                             },
                         })
                         logger.info(f"Neutral experience stored: {trigger_type}")
@@ -1026,9 +1034,11 @@ class LPLHAgent:
 
     def _run_auxiliary_gate(self, action: str, observation: str, score: int,
                             reward_change: int, action_valid,
-                            prev_location: str) -> dict:
+                            prev_location: str,
+                            visited_rooms_before: set = None) -> dict:
         """Use one aux LLM call to route selected expensive helper modules."""
         location = self.kg_map.current_location or "unknown"
+        rooms_visited_before = sorted(str(room) for room in (visited_rooms_before or []))
         visible_objects = self._visible_objects_for_location(location)
         current_state_snapshot = self._repetition_state_snapshot(
             location=location,
@@ -1072,6 +1082,7 @@ class LPLHAgent:
             "observation": observation,
             "score": score,
             "reward_change": reward_change,
+            "rooms_visited_before": rooms_visited_before,
             "visible_objects": visible_objects,
             "inventory": list(self.kg_map.inventory),
             "active_situations": self.situation_memory.active_situations(),
@@ -1086,6 +1097,7 @@ class LPLHAgent:
             "decision": {},
             "environmental_change_detection": {},
             "use_legacy_environmental_detection": False,
+            "use_legacy_summary_trigger_detection": False,
             "error": "",
         }
 
@@ -1098,6 +1110,7 @@ class LPLHAgent:
                 observation=observation,
                 score=score,
                 reward_change=reward_change,
+                rooms_visited_before=rooms_visited_before,
                 inventory=list(self.kg_map.inventory),
                 visible_objects=visible_objects,
                 active_situations=result["active_situations"],
@@ -1117,6 +1130,7 @@ class LPLHAgent:
                 result["error"] = parse_error
                 result["decision"] = self._fallback_auxiliary_gate_decision()
                 result["use_legacy_environmental_detection"] = True
+                result["use_legacy_summary_trigger_detection"] = True
             else:
                 result["decision"] = self._normalize_auxiliary_gate_decision(
                     parsed=parsed,
@@ -1133,6 +1147,7 @@ class LPLHAgent:
             result["finish_reason"] = self.llm.last_auxiliary_gate_finish_reason or ""
             result["decision"] = self._fallback_auxiliary_gate_decision()
             result["use_legacy_environmental_detection"] = True
+            result["use_legacy_summary_trigger_detection"] = True
 
         if not result.get("environmental_change_detection"):
             result["environmental_change_detection"] = (
@@ -1170,21 +1185,31 @@ class LPLHAgent:
 
     def _normalize_auxiliary_gate_decision(self, parsed: dict, action: str,
                                            action_valid) -> dict:
-        env_raw = parsed.get("environmental_change", {})
-        if isinstance(env_raw, bool):
-            env_changed = env_raw
-            env_evidence = ""
-        elif isinstance(env_raw, dict):
-            env_changed = self._coerce_gate_bool(
-                env_raw.get("changed", env_raw.get("environmental_change", False)),
-                default=False,
-            )
-            env_evidence = self._clean_text(env_raw.get("evidence", ""))
-        else:
-            env_changed = False
-            env_evidence = ""
+        summary_raw = parsed.get("summary_triggers", {})
+        if not isinstance(summary_raw, dict):
+            summary_raw = {}
+
+        navigation_summary = self._normalize_gate_summary_trigger(
+            summary_raw.get("navigation", parsed.get("navigation", {})),
+            default_run=False,
+        )
+        env_summary = self._normalize_gate_summary_trigger(
+            summary_raw.get(
+                "environmental",
+                summary_raw.get("environmental_change", parsed.get("environmental_change", {})),
+            ),
+            default_run=False,
+        )
+        narrative_summary = self._normalize_gate_summary_trigger(
+            summary_raw.get("narrative", parsed.get("narrative", {})),
+            default_run=False,
+        )
+
+        env_changed = bool(env_summary["run"])
+        env_evidence = env_summary.get("evidence", "")
         if action_valid is not True or self._is_movement_action(action):
             env_changed = False
+            env_summary["run"] = False
 
         situation_raw = parsed.get(
             "stored_situation_detection",
@@ -1196,6 +1221,11 @@ class LPLHAgent:
                 "changed": env_changed,
                 "evidence": env_evidence,
             },
+            "summary_triggers": {
+                "navigation": navigation_summary,
+                "environmental": env_summary,
+                "narrative": narrative_summary,
+            },
             "stored_situation_detection": self._normalize_gate_run_decision(
                 situation_raw,
                 default_run=True,
@@ -1204,6 +1234,21 @@ class LPLHAgent:
                 affordance_raw,
                 default_run=True,
             ),
+        }
+
+    def _normalize_gate_summary_trigger(self, value, default_run: bool) -> dict:
+        if isinstance(value, bool):
+            return {"run": value, "reason": "", "evidence": ""}
+        if not isinstance(value, dict):
+            return {"run": default_run, "reason": "", "evidence": ""}
+        evidence = self._clean_text(value.get("evidence", value.get("reason", "")))
+        return {
+            "run": self._coerce_gate_bool(
+                value.get("run", value.get("trigger", value.get("changed", default_run))),
+                default_run,
+            ),
+            "reason": self._clean_text(value.get("reason", evidence)),
+            "evidence": evidence,
         }
 
     def _normalize_gate_run_decision(self, value, default_run: bool) -> dict:
@@ -1231,6 +1276,23 @@ class LPLHAgent:
             "environmental_change": {
                 "changed": False,
                 "evidence": "Gate unavailable; legacy environmental detector should run.",
+            },
+            "summary_triggers": {
+                "navigation": {
+                    "run": False,
+                    "reason": "Gate unavailable; use legacy summary-trigger fallback.",
+                    "evidence": "",
+                },
+                "environmental": {
+                    "run": False,
+                    "reason": "Gate unavailable; use legacy summary-trigger fallback.",
+                    "evidence": "",
+                },
+                "narrative": {
+                    "run": False,
+                    "reason": "Gate unavailable; use legacy summary-trigger fallback.",
+                    "evidence": "",
+                },
             },
             "stored_situation_detection": {
                 "run": True,
@@ -1450,11 +1512,68 @@ class LPLHAgent:
     def _detect_neutral_triggers(self, observation: str, action_valid,
                                   visited_rooms_before: set,
                                   prev_location: str,
-                                  environmental_change: dict = None) -> list:
+                                  environmental_change: dict = None,
+                                  auxiliary_gate: dict = None) -> list:
         """Detect LPLH2 neutral-state experience triggers for this step."""
+        if (auxiliary_gate
+                and not auxiliary_gate.get("use_legacy_summary_trigger_detection")):
+            return self._detect_neutral_triggers_from_gate(
+                action_valid=action_valid,
+                prev_location=prev_location,
+                auxiliary_gate=auxiliary_gate,
+            )
+
+        return self._detect_neutral_triggers_legacy(
+            observation=observation,
+            action_valid=action_valid,
+            visited_rooms_before=visited_rooms_before,
+            prev_location=prev_location,
+            environmental_change=environmental_change,
+        )
+
+    def _detect_neutral_triggers_from_gate(self, action_valid,
+                                           prev_location: str,
+                                           auxiliary_gate: dict) -> list:
+        """Use the auxiliary gate's summary-trigger decisions."""
         triggers = []
 
-        # 1. Navigation: entered/discovered a room not visited before this step.
+        if action_valid is not True:
+            return triggers
+
+        summary_triggers = (
+            auxiliary_gate.get("decision", {}).get("summary_triggers", {})
+        )
+        if not isinstance(summary_triggers, dict):
+            summary_triggers = {}
+
+        for trigger_type in ("navigation", "environmental", "narrative"):
+            trigger_decision = summary_triggers.get(trigger_type, {})
+            if not isinstance(trigger_decision, dict):
+                continue
+            if trigger_decision.get("run"):
+                meta = {
+                    "gate_reason": trigger_decision.get("reason", ""),
+                    "gate_evidence": trigger_decision.get("evidence", ""),
+                }
+                if trigger_type == "navigation":
+                    meta["prev_location"] = prev_location
+                triggers.append((trigger_type, meta))
+
+        # 4. Error correction: valid action after 2+ consecutive failures.
+        if self.consecutive_failures >= 2:
+            triggers.append(("error_correction", {
+                "failed_attempts": list(self.recent_failed_actions),
+            }))
+
+        return triggers
+
+    def _detect_neutral_triggers_legacy(self, observation: str, action_valid,
+                                        visited_rooms_before: set,
+                                        prev_location: str,
+                                        environmental_change: dict = None) -> list:
+        """Fallback neutral-trigger detection used only when the gate fails."""
+        triggers = []
+
         new_location = self.kg_map.current_location
         if (action_valid is True
                 and new_location
@@ -1462,14 +1581,9 @@ class LPLHAgent:
                 and new_location != prev_location):
             triggers.append(("navigation", {"prev_location": prev_location}))
 
-        # Only check the remaining triggers if the action was confirmed valid.
         if action_valid is not True:
             return triggers
 
-        # 2/3. Environmental and narrative memories are mutually exclusive.
-        # The aux LLM decides whether the latest valid non-navigation action
-        # actually changed world state; otherwise informative read/examine/talk
-        # actions can still become narrative memories.
         nav_fired = any(t == "navigation" for t, _ in triggers)
         environmental = (
             not nav_fired
@@ -1481,7 +1595,6 @@ class LPLHAgent:
         elif narrative:
             triggers.append(("narrative", {}))
 
-        # 4. Error correction: valid action after 2+ consecutive failures.
         if self.consecutive_failures >= 2:
             triggers.append(("error_correction", {
                 "failed_attempts": list(self.recent_failed_actions),
