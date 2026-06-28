@@ -699,7 +699,8 @@ class GameRunner:
         lines.append(f"Status: {aff.get('status', 'missing')}")
         if aff.get("error"):
             lines.append(f"Error: {aff.get('error')}")
-        lines.append(str(gen.get("brainstormed_command_ideas")
+        lines.append(str(gen.get("affordance_agenda")
+                         or gen.get("brainstormed_command_ideas")
                          or aff.get("ideas_for_prompt")
                          or json.dumps(aff.get("ideas", []), indent=2, ensure_ascii=False)))
 
@@ -930,6 +931,7 @@ class GameRunner:
             "unproductive_commands": entry.get("unproductive_commands", []),
             "failed_command_verbs": entry.get("failed_command_verbs", []),
             "reset_cache": entry.get("reset_cache", False),
+            "pending_carryover_commands": entry.get("pending_carryover_commands", []),
         }
         ideas = entry.get("ideas", [])
 
@@ -985,13 +987,30 @@ class GameRunner:
         self._affordance_log_file.write(
             json.dumps(entry.get("same_state_tried_commands", []), indent=2, ensure_ascii=False)
         )
+        self._affordance_log_file.write("\n\nsame-state tried records:\n")
+        self._affordance_log_file.write(
+            json.dumps(entry.get("same_state_tried_records", []), indent=2, ensure_ascii=False)
+        )
+        self._affordance_log_file.write("\n\nfailed records here:\n")
+        self._affordance_log_file.write(
+            json.dumps(entry.get("failed_records_here", []), indent=2, ensure_ascii=False)
+        )
+        self._affordance_log_file.write("\n\npending carryover commands supplied to brainstorm:\n")
+        self._affordance_log_file.write(
+            json.dumps(entry.get("pending_carryover_commands", []), indent=2, ensure_ascii=False)
+        )
         self._affordance_log_file.write("\n\ncarried ideas after merge:\n")
         self._affordance_log_file.write(
             json.dumps(entry.get("carried_ideas_after", []), indent=2, ensure_ascii=False)
         )
-        self._affordance_log_file.write("\n\nideas sent to action selector:\n")
+        self._affordance_log_file.write("\n\naffordance agenda sent to action selector:\n")
         self._affordance_log_file.write(
-            str(gen.get("brainstormed_command_ideas")
+            json.dumps(entry.get("affordance_agenda", []), indent=2, ensure_ascii=False)
+        )
+        self._affordance_log_file.write("\n\nagenda text sent to action selector:\n")
+        self._affordance_log_file.write(
+            str(gen.get("affordance_agenda")
+                or gen.get("brainstormed_command_ideas")
                 or entry.get("ideas_for_prompt", "[]"))
         )
         if entry.get("error"):
@@ -1115,8 +1134,11 @@ class GameRunner:
         self._action_generation_log_file.write(str(generation.get("retrieved_experiences", "")))
         self._action_generation_log_file.write("\n\nstored situations context:\n")
         self._action_generation_log_file.write(str(generation.get("stored_situations_context", "[]")))
-        self._action_generation_log_file.write("\n\nbrainstormed command ideas sent to main LLM:\n")
-        self._action_generation_log_file.write(str(generation.get("brainstormed_command_ideas", "[]")))
+        self._action_generation_log_file.write("\n\naffordance agenda sent to main LLM:\n")
+        self._action_generation_log_file.write(
+            str(generation.get("affordance_agenda")
+                or generation.get("brainstormed_command_ideas", "[]"))
+        )
         self._action_generation_log_file.write("\n\nknown failed commands here:\n")
         self._action_generation_log_file.write(str(generation.get("known_failed_commands_here", "[]")))
         self._action_generation_log_file.write("\n\nsame-state tried commands:\n")

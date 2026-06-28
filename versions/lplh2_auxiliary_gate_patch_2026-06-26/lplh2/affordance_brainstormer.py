@@ -213,6 +213,58 @@ class AffordanceBrainstormer:
             })
         return json.dumps(compact, ensure_ascii=False)
 
+    def pending_commands(self, ideas: list[dict[str, Any]]) -> list[str]:
+        """Flatten pending commands from idea records for prompt context."""
+        commands: list[str] = []
+        for idea in ideas or []:
+            commands.extend(idea.get("commands_to_try", []))
+        return self._dedupe_commands(commands)
+
+    def build_agenda(self, ideas: list[dict[str, Any]],
+                     tried_records: list[dict[str, Any]] | None = None,
+                     failed_records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """Render pending ideas plus tried/failed context for the main LLM.
+
+        This is advisory context only. It makes carryover state legible without
+        forcing the action selector to try every pending command.
+        """
+        pending_ideas = self._copy_ideas(ideas)
+        tried_here = self._records_to_tried_entries(tried_records, source="same_state")
+        tried_here.extend(self._records_to_tried_entries(failed_records, source="failed_here"))
+        tried_here = self._dedupe_tried_entries(tried_here)
+
+        agenda: list[dict[str, Any]] = []
+        for idea in pending_ideas:
+            pending = self._clean_commands(idea.get("commands_to_try"))
+            if not pending:
+                continue
+            entry = {
+                "location": idea.get("location", "current location"),
+                "situation": idea.get("situation", ""),
+                "pending_commands": pending,
+            }
+            if idea.get("reason"):
+                entry["reason"] = idea.get("reason", "")
+            matching = self._matching_tried_entries(pending, tried_here)
+            if matching:
+                entry["already_tried_here"] = matching
+            agenda.append(entry)
+
+        if not agenda and tried_here:
+            agenda.append({
+                "location": tried_here[0].get("location", "current location"),
+                "situation": "commands already tried in this state or location",
+                "pending_commands": [],
+                "already_tried_here": tried_here[:8],
+            })
+
+        return agenda[:5]
+
+    def format_agenda_for_prompt(self, agenda: list[dict[str, Any]]) -> str:
+        if not agenda:
+            return "[]"
+        return json.dumps(agenda, ensure_ascii=False)
+
     def _extract_body(self, text: str) -> str:
         raw = str(text or "").strip()
         match = re.search(r"\|start\|\s*(.*?)\s*\|end\|", raw, re.DOTALL | re.IGNORECASE)
@@ -379,6 +431,75 @@ class AffordanceBrainstormer:
             if not existing.get("reason") and idea.get("reason"):
                 existing["reason"] = self._clean_field(idea.get("reason"))
         return [idea for idea in merged if idea.get("commands_to_try")][:5]
+
+    def _records_to_tried_entries(self, records: list[dict[str, Any]] | None,
+                                  source: str) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for record in records or []:
+            command = self._clean_command(record.get("command"))
+            if not command:
+                continue
+            result = (
+                record.get("result_observation")
+                or record.get("observation")
+                or record.get("failure_reason")
+                or record.get("reason")
+                or ""
+            )
+            entry = {
+                "command": command,
+                "result": self._clean_field(result)[:240],
+                "source": source,
+            }
+            if record.get("reason"):
+                entry["reason"] = self._clean_field(record.get("reason"))[:180]
+            if record.get("failure_reason"):
+                entry["reason"] = self._clean_field(record.get("failure_reason"))[:180]
+            if record.get("location"):
+                entry["location"] = self._clean_field(record.get("location"))
+            entries.append(entry)
+        return entries
+
+    def _dedupe_tried_entries(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in entries or []:
+            key = self._command_key(entry.get("command", ""))
+            if key and key not in seen:
+                output.append(entry)
+                seen.add(key)
+        return output[:12]
+
+    def _matching_tried_entries(self, pending_commands: list[str],
+                                tried_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not tried_entries:
+            return []
+        pending_tokens = self._command_tokens(pending_commands)
+        matches: list[dict[str, Any]] = []
+        for entry in tried_entries:
+            command = entry.get("command", "")
+            command_key = self._command_key(command)
+            command_tokens = set(self._normalize(command).split())
+            if command_key in {self._command_key(item) for item in pending_commands}:
+                matches.append(entry)
+            elif pending_tokens and command_tokens and pending_tokens.intersection(command_tokens):
+                matches.append(entry)
+        return matches[:6]
+
+    def _command_tokens(self, commands: list[str]) -> set[str]:
+        tokens: set[str] = set()
+        stop = {
+            "the", "a", "an", "to", "at", "in", "on", "with", "from",
+            "look", "examine", "search", "take", "get", "open", "close",
+            "move", "use", "read", "climb", "shake", "turn", "light",
+            "switch", "push", "pull", "lift", "attack", "kill", "hit",
+            "enter", "go", "walk", "head", "travel", "up", "down",
+        }
+        for command in commands or []:
+            for token in self._normalize(command).split():
+                if token and token not in stop:
+                    tokens.add(token)
+        return tokens
 
     def _dedupe_commands(self, commands: list[str]) -> list[str]:
         output: list[str] = []

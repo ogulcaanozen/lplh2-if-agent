@@ -155,7 +155,7 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Recent Attempts**: Reflect on the previous actions, the motivation of taking that action and observation after this attempt.
 - **Inventory Check**: Identify items on hand (keys, tools, etc.) that might solve current puzzles or overcome obstacles.
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
-- **Brainstormed Commands**: Review suggested object/inventory commands. They may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
+- **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
 - **Known Failed Commands Here**: These commands failed before at this location under the recorded world state. Avoid repeating them unless the current observation, inventory, visible objects, or score have changed enough to give a concrete reason to retry.
 - **Same-State Tried Commands**: These commands were already tried from the exact same state snapshot shown now. Treat them as strong cautionary evidence. Prefer a different command unless you can name a concrete state difference or a strong reason the retry is still useful.
 - **Objects & Interactions**: Focus on confirmed items or directions. If uncertain leads might advance the game, consider them cautiously.
@@ -192,8 +192,8 @@ Your internal reasoning steps Here.
 - If uncertain, explore unvisited areas or re-examine ('look') the current room.
 - Look for overlooked clues or alternative ways forward.
 4. **Exploratory Commands**
-- Use brainstormed object/inventory commands to try reasonable interactions with visible objects and carried items, especially after a pure navigation loop.
-- If brainstormed command ideas contain pending object/inventory/stored-situation commands for the current location, consider trying one before generic navigation, unless the current observation suggests navigation is more urgent.
+- Use pending affordance-agenda commands to try reasonable interactions with visible objects and carried items, especially after a pure navigation loop.
+- If the affordance agenda contains pending object/inventory/stored-situation commands for the current location, consider trying one before generic navigation, unless the current observation suggests navigation is more urgent. Use the already-tried entries as cautionary evidence.
 - If tools are available, think of how to use them on obstacles.
 - In case an exploration fails, attempt a different angle: return to a previous room, look around again, or try another approach.
 - **Explore the world**: It's better to try all directions in each room to identify the exit and update the game map. For 'may_direction', consider testing that path (e.g., "north").
@@ -216,7 +216,7 @@ Your internal reasoning steps Here.
 === CURRENT SCORE ===
 {score}
 
-=== BRAINSTORMED COMMAND IDEAS ===
+=== AFFORDANCE AGENDA (PENDING VS TRIED COMMANDS) ===
 {brainstormed_command_ideas}
 
 === KNOWN FAILED COMMANDS HERE ===
@@ -820,6 +820,9 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 4. Recent failed commands. If a command failed because the syntax was too specific, suggest simpler alternatives.
 5. Known failed commands at this exact location. Avoid those exact commands unless the current observation, inventory, visible objects, or score have changed enough to make retrying reasonable.
 6. Failed command verbs as cautionary evidence. Do not treat a failed verb as globally impossible; a verb can fail on one object and still work on another. Use this mainly to avoid repeating the same failed use.
+7. Valid-but-unproductive commands in this exact state. Do not re-propose the exact command unless the observation, inventory, visible objects, or score changed enough to justify retrying.
+8. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
+9. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
 
 **Output Rules:**
 - Output JSON only between |start| and |end|.
@@ -835,7 +838,9 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 - Keep commands short and directly executable: "take lantern", "turn on lantern", "move rug", "look under rug".
 - Do not repeat an exact recent failed command.
 - Avoid exact commands listed in Known Failed Commands Here unless the current state has meaningfully changed.
+- Avoid exact commands listed in Unproductive Commands Here or Same-State Tried Commands unless the current state has meaningfully changed.
 - Use Failed Command Verbs Here only as cautionary context. Do not ban a verb across all objects just because one command with that verb failed.
+- If Pending Carryover Commands already contain useful commands for the current object/situation, keep them or add complementary alternatives rather than regenerating the same failed command.
 - If a recent command was over-specific, suggest a simpler version. Example: if "take lantern from trophy case" failed, suggest "take lantern".
 - Do not suggest generic navigation unless it is needed for a stored situation or the observation explicitly points to that route.
 - Keep at most 5 situations and at most 4 commands per situation.
@@ -925,6 +930,9 @@ Inventory: {inventory}
 Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
 Failed Command Verbs Here: {failed_command_verbs}
+Unproductive Commands Here: {unproductive_commands_here}
+Same-State Tried Commands: {same_state_tried_commands}
+Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
 Learned Action Space Here: {action_space}
 Retrieved Experiences: {experiences}"""

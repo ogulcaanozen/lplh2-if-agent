@@ -861,6 +861,7 @@ class LPLHAgent:
             "retrieved_experiences": experiences,
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
+            "affordance_agenda": brainstormed_command_ideas,
             "known_failed_commands_here": known_failed_here,
             "same_state_tried_commands": same_state_tried_context,
             "same_state_tried_command_list": same_state_tried_commands,
@@ -902,6 +903,19 @@ class LPLHAgent:
             + unproductive_commands
             + list(same_state_tried_commands or [])
         )
+        same_state_snapshot = self._repetition_state_snapshot(
+            location=self.kg_map.current_location or "unknown",
+            observation=observation,
+            visible_objects=current_objects,
+            inventory=list(self.kg_map.inventory),
+            score=score,
+        )
+        same_state_records = self.state_action_memory.records_for_state(
+            same_state_snapshot
+        )
+        failed_records_here = self.failed_action_memory.records_for_location(
+            self.kg_map.current_location or "unknown"
+        )
         result = {
             "status": "not_run",
             "location": self.kg_map.current_location or "unknown",
@@ -913,6 +927,9 @@ class LPLHAgent:
             "failed_commands": filtered_commands,
             "unproductive_commands": unproductive_commands,
             "same_state_tried_commands": list(same_state_tried_commands or []),
+            "same_state_tried_records": same_state_records,
+            "failed_records_here": failed_records_here,
+            "pending_carryover_commands": [],
             "failed_command_verbs": failure_context["failed_verbs"],
             "active_situations": list(stored_situations or []),
             "score": score,
@@ -931,6 +948,7 @@ class LPLHAgent:
             "carried_ideas_before": [],
             "carried_ideas_after": [],
             "filtered_failed_commands": [],
+            "affordance_agenda": [],
             "ideas_for_prompt": "[]",
             "error": "",
         }
@@ -955,6 +973,9 @@ class LPLHAgent:
                 failed_commands=filtered_commands,
             )
         result["cached_ideas_available"] = len(cached_ideas)
+        result["pending_carryover_commands"] = (
+            self.affordance_brainstormer.pending_commands(cached_ideas)
+        )
 
         if not should_run:
             result["ideas"] = cached_ideas
@@ -962,8 +983,13 @@ class LPLHAgent:
             result["carried_ideas_after"] = cached_ideas
             result["filtered_failed_commands"] = list(dict.fromkeys(filtered_commands))
             if result["ideas"]:
-                result["ideas_for_prompt"] = self.affordance_brainstormer.format_for_prompt(
-                    result["ideas"], include_reason=False
+                result["affordance_agenda"] = self.affordance_brainstormer.build_agenda(
+                    result["ideas"],
+                    tried_records=same_state_records,
+                    failed_records=failed_records_here,
+                )
+                result["ideas_for_prompt"] = self.affordance_brainstormer.format_agenda_for_prompt(
+                    result["affordance_agenda"]
                 )
                 result["status"] = "skipped_by_gate_with_cached_ideas"
             else:
@@ -979,6 +1005,9 @@ class LPLHAgent:
                 recent_failed_commands=result["recent_failed_commands"],
                 known_failed_commands_here=known_failed_here,
                 failed_command_verbs=result["failed_command_verbs"],
+                unproductive_commands_here=unproductive_commands,
+                same_state_tried_commands=list(same_state_tried_commands or []),
+                pending_carryover_commands=result["pending_carryover_commands"],
                 stored_situations=result["active_situations"],
                 action_space=action_space_context,
                 experiences=experiences,
@@ -1004,8 +1033,13 @@ class LPLHAgent:
             result["filtered_failed_commands"] = merge["filtered_failed_commands"]
             result["ideas"] = merge["merged_ideas"]
             if result["ideas"]:
-                result["ideas_for_prompt"] = self.affordance_brainstormer.format_for_prompt(
-                    result["ideas"], include_reason=False
+                result["affordance_agenda"] = self.affordance_brainstormer.build_agenda(
+                    result["ideas"],
+                    tried_records=same_state_records,
+                    failed_records=failed_records_here,
+                )
+                result["ideas_for_prompt"] = self.affordance_brainstormer.format_agenda_for_prompt(
+                    result["affordance_agenda"]
                 )
 
             if parse_error:

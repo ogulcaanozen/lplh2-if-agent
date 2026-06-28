@@ -55,6 +55,12 @@ This preserves the previous behavior when the new gate is unavailable.
 - Extended the gate response with a `summary_triggers` section so
   `navigation`, `environmental`, and `narrative` summaries are LLM-routed.
   The old local summary-trigger checks remain only as a gate-failure fallback.
+- Added fuller affordance context for brainstorming: unproductive commands,
+  same-state tried commands, and pending carryover commands are now supplied to
+  the brainstorm LLM before it generates new ideas.
+- Replaced the main action prompt's raw brainstorm list with an explicit
+  affordance agenda that separates pending commands from commands already tried
+  in the same state/location.
 
 ## Verification
 
