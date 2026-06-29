@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 This file is a handoff note for continuing the LPLH2 research project from another computer or a fresh Codex session.
 
@@ -90,6 +90,25 @@ Important LPLH2 fixes already applied:
   - concrete take/drop/loss evidence can add or remove carried items,
   - inventory reconciliation is logged in detailed run logs and
     `auxiliary_gate_log.txt`.
+- Condition-aware affordance trigger added:
+  - the auxiliary gate receives recent same-location command outcomes,
+  - the gate can trigger fresh brainstorming when several different commands
+    produce similarly abnormal, garbled, repeated, obscured, blocked, or
+    mismatched observations,
+  - affordance brainstorming can emit optional `kind: "condition"` ideas,
+  - the action prompt treats condition ideas as advisory context, not forced
+    commands.
+- Auxiliary gate logging now writes `auxiliary_gate_log.txt` with:
+  - step/action/location metadata,
+  - observation,
+  - prompt,
+  - raw LLM response,
+  - parsed response body,
+  - normalized decision,
+  - inventory reconciliation,
+  - environmental-change detail,
+  - recent failures, same-state tried commands, active situations, and recent
+    command outcomes.
 
 ## Current Known Problem
 
@@ -100,33 +119,32 @@ The agent still tends to repeat object commands or low-value interactions in Zor
 - `egg`
 - `canary`
 
-The latest same-state repetition patch should reduce this, but it has not yet been validated in a full experiment.
+The latest same-state repetition and condition-aware brainstorming patches
+should reduce this, but they still need validation in a fresh experiment.
 
 ## Next Planned Patch
 
-The next design idea is to optimize and stabilize affordance brainstorming:
+The next design idea is an `Active Situation Plan`, documented in
+`PATCH_NOTES.md`. Situation memory is currently passive: it remembers unresolved
+future-return problems, but the agent can forget a multi-step intention after
+finding a possible solution item. The planned design is a singleton advisory
+plan such as:
 
-1. Do not call the brainstormer every step.
-2. Run brainstorming only when there is likely affordance material:
-   - visible objects/features,
-   - inventory items,
-   - active stored situations,
-   - object/syntax failures needing alternatives,
-   - or a meaningfully changed state.
-3. Cache brainstorm ideas by exact state.
-4. Track pending vs tried brainstorm commands.
-5. Show the main LLM:
-
-```text
-Pending brainstormed alternatives:
-- move leaves
-- look under leaves
-
-Already tried in this same state:
-- take leaves -> The leaves are of no use.
+```json
+{
+  "source_situation_key": "kitchen_upstairs_dark_upstairs_area_may_require_light",
+  "target_location": "Kitchen",
+  "goal": "test whether the lantern helps with the dark upstairs area",
+  "created_step": 88,
+  "attempts_at_target": 0
+}
 ```
 
-The main LLM should still decide freely. The system should provide better context, not force or block actions.
+This plan should persist intention across navigation steps, feed the
+brainstormer as focus, and remain advisory. It should not store fixed command
+lists because those can go stale and create loops. Opus also noted that this
+fixes intention persistence, not navigation execution; a later advisory KG-map
+route hint may be useful.
 
 ## Research Preference
 
@@ -144,9 +162,10 @@ The user wants the framework to remain LLM-centered rather than becoming a rule-
 
 Useful next experiments:
 
-- 1 epoch x 150 steps after same-state repetition memory patch.
-- Compare run logs before/after repetition memory.
+- 1 epoch x 250 steps on Zork1 with the latest inventory-gate snapshot.
+- Compare run logs before/after condition-aware brainstorming.
 - Inspect:
+  - `auxiliary_gate_log.txt`
   - `action_generation_log.txt`
   - `affordance_brainstorm_log.txt`
   - `action_failure_memory_log.txt`

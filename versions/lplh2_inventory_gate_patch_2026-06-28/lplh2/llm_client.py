@@ -380,6 +380,7 @@ class LLMClient:
                                active_situations: list,
                                recent_failed_commands: list,
                                known_failed_commands_here: str,
+                               recent_command_outcomes: list,
                                same_state_tried_commands: list,
                                cached_affordance_ideas_available: int) -> str:
         """Route selected auxiliary modules for the latest completed step."""
@@ -398,6 +399,7 @@ class LLMClient:
             active_situations=json.dumps(active_situations or [], ensure_ascii=False),
             recent_failed_commands=json.dumps(recent_failed_commands or [], ensure_ascii=False),
             known_failed_commands_here=known_failed_commands_here or "[]",
+            recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
             cached_affordance_ideas_available=int(cached_affordance_ideas_available or 0),
         )
@@ -427,6 +429,7 @@ class LLMClient:
                                visible_objects: list, inventory: list,
                                recent_failed_commands: list,
                                known_failed_commands_here: str,
+                               recent_command_outcomes: list,
                                failed_command_verbs: list,
                                unproductive_commands_here: list,
                                same_state_tried_commands: list,
@@ -443,6 +446,7 @@ class LLMClient:
             inventory=json.dumps(inventory or [], ensure_ascii=False),
             recent_failed_commands=json.dumps(recent_failed_commands or [], ensure_ascii=False),
             known_failed_commands_here=known_failed_commands_here or "[]",
+            recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
             failed_command_verbs=json.dumps(failed_command_verbs or [], ensure_ascii=False),
             unproductive_commands_here=json.dumps(unproductive_commands_here or [], ensure_ascii=False),
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),

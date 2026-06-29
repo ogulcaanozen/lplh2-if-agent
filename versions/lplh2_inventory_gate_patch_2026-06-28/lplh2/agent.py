@@ -903,6 +903,9 @@ class LPLHAgent:
             + unproductive_commands
             + list(same_state_tried_commands or [])
         )
+        recent_command_outcomes = self._recent_same_location_outcomes(
+            self.kg_map.current_location or "unknown"
+        )
         same_state_snapshot = self._repetition_state_snapshot(
             location=self.kg_map.current_location or "unknown",
             observation=observation,
@@ -924,6 +927,7 @@ class LPLHAgent:
             "inventory": list(self.kg_map.inventory),
             "recent_failed_commands": list(self.recent_failed_actions),
             "known_failed_commands_here": known_failed_here,
+            "recent_command_outcomes": recent_command_outcomes,
             "failed_commands": filtered_commands,
             "unproductive_commands": unproductive_commands,
             "same_state_tried_commands": list(same_state_tried_commands or []),
@@ -1004,6 +1008,7 @@ class LPLHAgent:
                 inventory=result["inventory"],
                 recent_failed_commands=result["recent_failed_commands"],
                 known_failed_commands_here=known_failed_here,
+                recent_command_outcomes=recent_command_outcomes,
                 failed_command_verbs=result["failed_command_verbs"],
                 unproductive_commands_here=unproductive_commands,
                 same_state_tried_commands=list(same_state_tried_commands or []),
@@ -1086,6 +1091,7 @@ class LPLHAgent:
             current_state_snapshot
         )
         known_failed_here = self.failed_action_memory.format_for_prompt(location)
+        recent_command_outcomes = self._recent_same_location_outcomes(location)
         recent_failed_for_gate = list(self.recent_failed_actions)
         if action_valid is False and action:
             recent_failed_for_gate.append(action)
@@ -1124,6 +1130,7 @@ class LPLHAgent:
             "active_situations": self.situation_memory.active_situations(),
             "recent_failed_commands": recent_failed_for_gate,
             "known_failed_commands_here": known_failed_here,
+            "recent_command_outcomes": recent_command_outcomes,
             "same_state_tried_commands": same_state_tried_commands,
             "cached_affordance_ideas_available": len(cached_affordance_ideas),
             "prompt": "",
@@ -1153,6 +1160,7 @@ class LPLHAgent:
                 active_situations=result["active_situations"],
                 recent_failed_commands=recent_failed_for_gate,
                 known_failed_commands_here=known_failed_here,
+                recent_command_outcomes=recent_command_outcomes,
                 same_state_tried_commands=same_state_tried_commands,
                 cached_affordance_ideas_available=len(cached_affordance_ideas),
             )
@@ -1519,6 +1527,55 @@ class LPLHAgent:
 
     def _clean_text(self, value) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def _recent_same_location_outcomes(self, location: str,
+                                       max_items: int = 5) -> list[dict]:
+        """Recent command->observation pairs issued from the same source room.
+
+        The gate/brainstormer use this as advisory evidence for general
+        condition-level problems where several different commands produce
+        similarly distorted, blocked, or mismatched observations.
+        """
+        target = self._normalize_event_piece(location or "unknown")
+        outcomes: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(command: str, observation: str, source_location: str):
+            if not command or not observation:
+                return
+            if self._normalize_event_piece(source_location) != target:
+                return
+            clean_command = self._clean_text(command)[:80]
+            clean_observation = self._clean_text(observation)[:180]
+            if not clean_command or not clean_observation:
+                return
+            key = (clean_command.lower(), clean_observation.lower())
+            if key in seen:
+                return
+            seen.add(key)
+            outcomes.append({
+                "command": clean_command,
+                "observation": clean_observation,
+            })
+
+        for detail in self.step_details[-max_items * 4:]:
+            if not isinstance(detail, dict):
+                continue
+            modules = detail.get("modules", {}) or {}
+            generation = modules.get("action_generation", {}) or {}
+            snapshot = generation.get("state_snapshot_at_generation", {}) or {}
+            source_location = snapshot.get("location", "")
+            command = detail.get("final_command") or generation.get("parsed_command", "")
+            observation = detail.get("observation", "")
+            add(command, observation, source_location)
+
+        source_generation = self.pending_generation or {}
+        source_snapshot = source_generation.get("state_snapshot_at_generation", {}) or {}
+        if self.history:
+            current_command, current_observation = self.history[-1]
+            add(current_command, current_observation, source_snapshot.get("location", ""))
+
+        return outcomes[-max_items:]
 
     def _world_signature(self, location: str, score: int) -> dict:
         """Compact state snapshot used to decide whether a failure may be stale."""

@@ -156,6 +156,7 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Inventory Check**: Identify items on hand (keys, tools, etc.) that might solve current puzzles or overcome obstacles.
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
 - **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
+- **Condition-Level Agenda**: Some affordance agenda entries may have "kind": "condition"; these target a room/environment/perception/parser condition rather than one visible object. Consider them when recent observations suggest normal commands are being distorted, obscured, blocked, or mismatched.
 - **Known Failed Commands Here**: These commands failed before at this location under the recorded world state. Avoid repeating them unless the current observation, inventory, visible objects, or score have changed enough to give a concrete reason to retry.
 - **Same-State Tried Commands**: These commands were already tried from the exact same state snapshot shown now. Treat them as strong cautionary evidence. Prefer a different command unless you can name a concrete state difference or a strong reason the retry is still useful.
 - **Objects & Interactions**: Focus on confirmed items or directions. If uncertain leads might advance the game, consider them cautiously.
@@ -194,6 +195,7 @@ Your internal reasoning steps Here.
 4. **Exploratory Commands**
 - Use pending affordance-agenda commands to try reasonable interactions with visible objects and carried items, especially after a pure navigation loop.
 - If the affordance agenda contains pending object/inventory/stored-situation commands for the current location, consider trying one before generic navigation, unless the current observation suggests navigation is more urgent. Use the already-tried entries as cautionary evidence.
+- If the affordance agenda contains condition-level commands for the current location, consider addressing the condition itself before repeating object commands that produced abnormal or mismatched observations.
 - If tools are available, think of how to use them on obstacles.
 - In case an exploration fails, attempt a different angle: return to a previous room, look around again, or try another approach.
 - **Explore the world**: It's better to try all directions in each room to identify the exit and update the game map. For 'may_direction', consider testing that path (e.g., "north").
@@ -505,6 +507,15 @@ Make exactly these decisions:
      situations that may now be addressable, recent failures needing alternate
      wording, meaningful score/inventory/world change, or no cached ideas for
      this state.
+   - Also set "run": true when Recent Command Outcomes Here suggest that a
+     persistent environmental, perceptual, mental, or parser-like condition is
+     distorting normal command interpretation. General evidence includes
+     several different commands in the same location producing similarly
+     repeated, echoed, garbled, obscured, blocked, mismatched, or
+     condition-dominated observations.
+   - This condition signal overrides the cached-ideas skip. Cached object-level
+     ideas may not address the condition itself, so fresh brainstorming should
+     run to reconsider condition-level options.
    - Set false when the same state already has cached affordance ideas and there
      is no meaningful new object, inventory, situation, failure, or world-change
      signal.
@@ -568,6 +579,7 @@ Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
 Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
+Recent Command Outcomes Here: {recent_command_outcomes}
 Same-State Tried Commands: {same_state_tried_commands}
 Cached Affordance Ideas Available For This State: {cached_affordance_ideas_available}"""
 
@@ -634,6 +646,10 @@ Before storing anything, ask:
 - An unreachable object/path with a stated condition or missing requirement.
 - A room description that names a concrete future-return problem, such as a dark staircase, dark chimney, locked gate, dangerous area, or inaccessible passage.
 - An explicit missing condition, e.g. needing light, a key, a tool, protection, strength, or another route.
+- A concrete environmental, perceptual, mental, or parser-like condition that
+  appears to interfere with normal command results, such as darkness, noise,
+  silence, confusion, fog, smoke, being underwater, blindness, magical
+  interference, or observations that show commands are being distorted.
 
 **Do NOT Store:**
 - Generic failed movement responses such as "You can't go that way" or "There is no exit in that direction."
@@ -663,7 +679,9 @@ Before storing anything, ask:
 
 **Field Meanings:**
 - "location": Use the current location when possible. If the situation is tied to a nearby connected area, describe it concisely, e.g. "Kitchen / dark upstairs area".
-- "situation": Describe only the unresolved problem. Keep it short, factual, and based on the observation.
+- "situation": Describe only the unresolved problem and direct evidence. Keep
+  it short, factual, and based on the observation. Do not prescribe a remedy
+  unless the observation directly states one.
 
 **Good Examples:**
 
@@ -867,7 +885,7 @@ You are NOT choosing the final next action. Your job is to propose a small set o
 
 The final action selector will receive your suggestions along with the map, action space, memories, and current observation.
 
-This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should run and produce ideas even when there are no active stored situations. Stored situations are only extra context that may suggest additional useful commands.
+This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should run and produce ideas even when there are no active stored situations. Stored situations are only extra context that may suggest additional useful commands. When recent same-location command outcomes show that normal interaction is being distorted, blocked, obscured, or mismatched by a persistent condition, also brainstorm condition-level commands.
 
 **What To Consider:**
 1. Visible objects and room features in the current observation. For each important object, think of natural commands a player might try.
@@ -879,6 +897,7 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 7. Valid-but-unproductive commands in this exact state. Do not re-propose the exact command unless the observation, inventory, visible objects, or score changed enough to justify retrying.
 8. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
 9. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
+10. Recent same-location command outcomes. If several different commands in the same location produce similarly repeated, echoed, garbled, obscured, blocked, mismatched, or condition-dominated observations, consider whether a persistent environmental/perceptual/mental/parser-like condition is interfering with normal command effects.
 
 **Output Rules:**
 - Output JSON only between |start| and |end|.
@@ -886,8 +905,9 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
   - "location": the current location or the relevant stored-situation location.
   - "situation": a short factual description of what these commands address.
   - "reason": one short concrete sentence explaining why these commands fit the observation, inventory, or stored situation.
+  - "kind": optional; use "condition" only for a condition-level idea, otherwise omit it or use "object".
   - "commands_to_try": concrete game commands to try.
-- Do not include priority, type, confidence, why_it_matters, when_to_stop, or long explanations.
+- Do not include priority, confidence, why_it_matters, when_to_stop, or long explanations.
 - Use simple canonical commands that IF parsers usually understand.
 - You may suggest useful verbs that are not in the learned action space.
 - Do suggest interactions for newly observed objects even if no stored situation exists. Example: a visible rug can suggest "move rug", "lift rug", and "look under rug".
@@ -898,6 +918,8 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 - Use Failed Command Verbs Here only as cautionary context. Do not ban a verb across all objects just because one command with that verb failed.
 - If Pending Carryover Commands already contain useful commands for the current object/situation, keep them or add complementary alternatives rather than regenerating the same failed command.
 - If a recent command was over-specific, suggest a simpler version. Example: if "take lantern from trophy case" failed, suggest "take lantern".
+- If Recent Command Outcomes Here show several different commands producing similarly abnormal outputs, include at most one "kind": "condition" situation with at most 3 commands that address the condition itself. These commands can observe, listen, respond, change perception/light/sound/speech, wait/rest/concentrate, or reposition, but only when the transcript or stored situations give concrete evidence.
+- Do not suggest generic condition commands such as listen, wait, or make noise in ordinary rooms without transcript or stored-situation evidence.
 - Do not suggest generic navigation unless it is needed for a stored situation or the observation explicitly points to that route.
 - Keep at most 5 situations and at most 4 commands per situation.
 - If there are no useful object/inventory/stored-situation ideas, output exactly:
@@ -968,6 +990,25 @@ Output:
 ]
 |end|
 
+Current Location: Resonant Chamber
+Observation: "The room hums loudly, and every attempted action seems to come back distorted."
+Inventory: ["lamp"]
+Active Stored Situations: [{{"location": "Resonant Chamber", "situation": "room condition distorts normal command results"}}]
+Recent Failed Commands: ["take coin", "examine lamp"]
+Recent Command Outcomes Here: [{{"command": "take coin", "observation": "coin coin coin ..."}}, {{"command": "examine lamp", "observation": "lamp lamp lamp ..."}}, {{"command": "open door", "observation": "door door door ..."}}]
+Output:
+|start|
+[
+  {{
+    "kind": "condition",
+    "location": "Resonant Chamber",
+    "situation": "room condition is distorting normal command results",
+    "reason": "Several different commands produced similarly repeated observations in this location.",
+    "commands_to_try": ["listen", "wait", "say hello"]
+  }}
+]
+|end|
+
 Current Location: Forest
 Observation: "The forest becomes impenetrable to the north."
 Inventory: []
@@ -985,6 +1026,7 @@ Visible Objects: {visible_objects}
 Inventory: {inventory}
 Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
+Recent Command Outcomes Here: {recent_command_outcomes}
 Failed Command Verbs Here: {failed_command_verbs}
 Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}

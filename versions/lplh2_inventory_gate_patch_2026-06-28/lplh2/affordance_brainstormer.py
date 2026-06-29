@@ -60,14 +60,18 @@ class AffordanceBrainstormer:
             location = self._clean_field(item.get("location"))
             situation = self._clean_field(item.get("situation"))
             reason = self._clean_field(item.get("reason"))
+            kind = self._clean_kind(item.get("kind"))
             commands = self._clean_commands(item.get("commands_to_try"))
             if commands:
-                ideas.append({
+                idea = {
                     "location": location or "current location",
                     "situation": situation or self._situation_from_commands(commands),
                     "reason": reason,
                     "commands_to_try": commands,
-                })
+                }
+                if kind:
+                    idea["kind"] = kind
+                ideas.append(idea)
 
         return ideas, None
 
@@ -206,11 +210,14 @@ class AffordanceBrainstormer:
             return json.dumps(ideas, ensure_ascii=False)
         compact = []
         for idea in ideas:
-            compact.append({
+            item = {
                 "location": idea.get("location", "current location"),
                 "situation": idea.get("situation", ""),
                 "commands_to_try": idea.get("commands_to_try", []),
-            })
+            }
+            if idea.get("kind"):
+                item["kind"] = idea.get("kind")
+            compact.append(item)
         return json.dumps(compact, ensure_ascii=False)
 
     def pending_commands(self, ideas: list[dict[str, Any]]) -> list[str]:
@@ -243,6 +250,8 @@ class AffordanceBrainstormer:
                 "situation": idea.get("situation", ""),
                 "pending_commands": pending,
             }
+            if idea.get("kind"):
+                entry["kind"] = idea.get("kind")
             if idea.get("reason"):
                 entry["reason"] = idea.get("reason", "")
             matching = self._matching_tried_entries(pending, tried_here)
@@ -346,12 +355,21 @@ class AffordanceBrainstormer:
                 segment,
                 flags=re.IGNORECASE | re.DOTALL,
             ))
-            items.append({
+            kind_match = list(re.finditer(
+                r'"?kind"?\s*:\s*"([^"]+)"',
+                segment,
+                flags=re.IGNORECASE | re.DOTALL,
+            ))
+            item = {
                 "location": location_match[-1].group(1) if location_match else "current location",
                 "situation": situation_match[-1].group(1) if situation_match else "",
                 "reason": reason_match[-1].group(1) if reason_match else "",
                 "commands_to_try": commands,
-            })
+            }
+            kind = self._clean_kind(kind_match[-1].group(1) if kind_match else "")
+            if kind:
+                item["kind"] = kind
+            items.append(item)
         return items
 
     def _parse_known_failed_commands(self, text: str) -> list[str]:
@@ -380,6 +398,12 @@ class AffordanceBrainstormer:
         if value is None:
             return ""
         return re.sub(r"\s+", " ", str(value)).strip()
+
+    def _clean_kind(self, value: Any) -> str:
+        kind = self._clean_field(value).lower()
+        if kind in {"object", "condition"}:
+            return kind
+        return ""
 
     def _clean_commands(self, value: Any) -> list[str]:
         if not isinstance(value, list):
@@ -413,15 +437,21 @@ class AffordanceBrainstormer:
             location = self._clean_field(idea.get("location")) or "current location"
             key = f"{self._normalize(location)}|{self._normalize(situation)}"
             if key not in by_key:
+                kind = self._clean_kind(idea.get("kind"))
                 clean = {
                     "location": location,
                     "situation": situation or self._situation_from_commands(idea.get("commands_to_try", [])),
                     "reason": self._clean_field(idea.get("reason")),
                     "commands_to_try": [],
                 }
+                if kind:
+                    clean["kind"] = kind
                 by_key[key] = clean
                 merged.append(clean)
             existing = by_key[key]
+            kind = self._clean_kind(idea.get("kind"))
+            if kind == "condition" or (kind and not existing.get("kind")):
+                existing["kind"] = kind
             for command in self._clean_commands(idea.get("commands_to_try")):
                 if self._command_key(command) not in {
                     self._command_key(c) for c in existing["commands_to_try"]

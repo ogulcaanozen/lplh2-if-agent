@@ -880,6 +880,13 @@ class GameRunner:
             "action_valid": entry.get("action_valid"),
             "reward_change": entry.get("reward_change"),
             "rooms_visited_before": entry.get("rooms_visited_before"),
+            "inventory_before": entry.get("inventory_before"),
+            "current_inventory": entry.get("inventory"),
+            "active_situations": entry.get("active_situations"),
+            "recent_failed_commands": entry.get("recent_failed_commands"),
+            "known_failed_commands_here": entry.get("known_failed_commands_here"),
+            "recent_command_outcomes": entry.get("recent_command_outcomes"),
+            "same_state_tried_commands": entry.get("same_state_tried_commands"),
             "cached_affordance_ideas_available": entry.get("cached_affordance_ideas_available"),
             "use_legacy_environmental_detection": entry.get("use_legacy_environmental_detection"),
             "use_legacy_summary_trigger_detection": entry.get(
