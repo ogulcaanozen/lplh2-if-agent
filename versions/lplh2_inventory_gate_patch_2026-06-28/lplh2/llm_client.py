@@ -81,6 +81,26 @@ class LLMClient:
                 f"experience summarization will fall back to LLM_a."
             )
 
+        # Optional dedicated OpenAI client for affordance brainstorming only.
+        self._brainstorm_client = None
+        if config.LLM_BRAINSTORM_MODEL and config.OPENAI_API_KEY:
+            from openai import OpenAI
+            self._brainstorm_client = OpenAI(
+                api_key=config.OPENAI_API_KEY,
+                timeout=config.OPENAI_TIMEOUT_SECONDS,
+                max_retries=config.OPENAI_MAX_RETRIES,
+            )
+            effort = config.LLM_BRAINSTORM_REASONING_EFFORT or "default"
+            logger.info(
+                f"Affordance brainstormer: openai/{config.LLM_BRAINSTORM_MODEL} "
+                f"(reasoning_effort={effort})"
+            )
+        elif config.LLM_BRAINSTORM_MODEL:
+            logger.warning(
+                f"LLM_BRAINSTORM_MODEL is set ({config.LLM_BRAINSTORM_MODEL}) but "
+                f"OPENAI_API_KEY is empty - affordance brainstorming will fall back."
+            )
+
         self.last_summary_prompt = None
         self.last_summary_raw_response = None
         self.last_summary_kind = None
@@ -262,6 +282,42 @@ class LLMClient:
         return response, finish_reason
 
     # ── Experience summarization (LLM_es) ──────────────────────
+
+    def _chat_brainstorm_once(self, prompt: str,
+                              max_completion_tokens: int) -> tuple[str, str]:
+        """Run one dedicated OpenAI affordance-brainstorm call."""
+        kwargs = {
+            "model": config.LLM_BRAINSTORM_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_completion_tokens": max_completion_tokens,
+        }
+        effort = config.LLM_BRAINSTORM_REASONING_EFFORT
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        resp = self._brainstorm_client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        content = getattr(choice.message, "content", None) or ""
+        finish_reason = getattr(choice, "finish_reason", "") or ""
+        return content, finish_reason
+
+    def _chat_brainstorm_json(self, prompt: str, max_completion_tokens: int,
+                              retry_instruction: str = "",
+                              retry_tokens: int = None) -> tuple[str, str]:
+        """Run a dedicated brainstorm JSON call, retrying empty/truncated output."""
+        response, finish_reason = self._chat_brainstorm_once(
+            prompt, max_completion_tokens
+        )
+        should_retry = (not str(response or "").strip()) or finish_reason == "length"
+        if should_retry and retry_instruction:
+            retry_prompt = f"{prompt}\n\n{retry_instruction}"
+            retry_response, retry_finish_reason = self._chat_brainstorm_once(
+                retry_prompt,
+                retry_tokens or max_completion_tokens,
+            )
+            if str(retry_response or "").strip():
+                return retry_response, f"{finish_reason or 'empty'} -> retry:{retry_finish_reason or 'unknown'}"
+            return response, f"{finish_reason or 'empty'} -> retry_empty:{retry_finish_reason or 'unknown'}"
+        return response, finish_reason
 
     def summarize_experience(self, history: str, reward_change: int,
                               current_score: int) -> str:
@@ -489,7 +545,23 @@ class LLMClient:
         self.last_affordance_prompt = prompt
         self.last_affordance_raw_response = None
         self.last_affordance_finish_reason = None
-        if self._es_client and config.LLM_ES_MODEL:
+        if self._brainstorm_client and config.LLM_BRAINSTORM_MODEL:
+            response, finish_reason = self._chat_brainstorm_json(
+                prompt,
+                max_completion_tokens=4096,
+                retry_instruction=(
+                    "The previous response was empty or truncated. Return compact valid JSON only: "
+                    "at most 3 objects, at most 3 commands per object, no extra prose. "
+                    "If there are no useful ideas, return exactly |start| [] |end|."
+                ),
+                retry_tokens=3072,
+            )
+            effort = config.LLM_BRAINSTORM_REASONING_EFFORT or "default"
+            self.last_affordance_finish_reason = (
+                f"{finish_reason}; model=openai/{config.LLM_BRAINSTORM_MODEL}; "
+                f"reasoning_effort={effort}"
+            )
+        elif self._es_client and config.LLM_ES_MODEL:
             response, finish_reason = self._chat_es_json(
                 prompt,
                 max_completion_tokens=4096,

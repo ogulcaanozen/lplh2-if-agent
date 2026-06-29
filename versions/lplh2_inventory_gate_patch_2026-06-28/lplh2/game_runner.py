@@ -115,36 +115,43 @@ class GameRunner:
         self._auxiliary_gate_log_file = open(
             auxiliary_gate_log_path, "w", encoding="utf-8", buffering=1
         )
+        aux_model = config.LLM_ES_MODEL or "LLM_a fallback"
+        brainstorm_model = config.LLM_BRAINSTORM_MODEL or aux_model
+        brainstorm_effort = (
+            f" (reasoning_effort={config.LLM_BRAINSTORM_REASONING_EFFORT})"
+            if config.LLM_BRAINSTORM_MODEL else ""
+        )
         self._log_file.write(f"LPLH Run Log — {game_name}\n")
         self._log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
             f"LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL} | "
-            f"LLM_aux/es: {config.LLM_ES_MODEL or 'LLM_a fallback'} | "
+            f"LLM_aux/es: {aux_model} | "
+            f"LLM_brainstorm: {brainstorm_model}{brainstorm_effort} | "
             f"fm: {config.FM_BASE_MODEL} + {config.FM_MODEL_PATH}\n"
         )
         self._log_file.write("=" * 70 + "\n")
         self._summary_log_file.write(f"LPLH Summary Module Log - {game_name}\n")
         self._summary_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+            f"LLM_es: {aux_model}\n"
         )
         self._summary_log_file.write("=" * 70 + "\n")
         self._situation_log_file.write(f"LPLH2 Situation Memory Log - {game_name}\n")
         self._situation_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+            f"LLM_es: {aux_model}\n"
         )
         self._situation_log_file.write("=" * 70 + "\n")
         self._affordance_log_file.write(f"LPLH2 Affordance Brainstorm Log - {game_name}\n")
         self._affordance_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+            f"LLM_brainstorm: {brainstorm_model}{brainstorm_effort}\n"
         )
         self._affordance_log_file.write("=" * 70 + "\n")
         self._action_failure_log_file.write(f"LPLH2 Action Failure Memory Log - {game_name}\n")
         self._action_failure_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+            f"LLM_es: {aux_model}\n"
         )
         self._action_failure_log_file.write("=" * 70 + "\n")
         self._action_generation_log_file.write(f"LPLH2 Action Generation Log - {game_name}\n")
@@ -156,7 +163,7 @@ class GameRunner:
         self._auxiliary_gate_log_file.write(f"LPLH2 Auxiliary Gate Log - {game_name}\n")
         self._auxiliary_gate_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_es: {config.LLM_ES_MODEL or 'LLM_a fallback'}\n"
+            f"LLM_es: {aux_model}\n"
         )
         self._auxiliary_gate_log_file.write("=" * 70 + "\n")
         print(f"Experiment log dir: {self._experiment_log_dir}")
@@ -179,7 +186,8 @@ class GameRunner:
         print(f"  LPLH Framework - Playing: {game_name}")
         print(f"  Epochs: {self.num_epochs}, Steps/epoch: {self.max_steps}")
         print(f"  LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL}")
-        print(f"  LLM_aux/es: {config.LLM_ES_MODEL or 'LLM_a fallback'}")
+        print(f"  LLM_aux/es: {aux_model}")
+        print(f"  LLM_brainstorm: {brainstorm_model}{brainstorm_effort}")
         print(f"  fm : {config.FM_BASE_MODEL} + {config.FM_MODEL_PATH}")
         print(f"{'='*70}\n")
         sys.stdout.flush()

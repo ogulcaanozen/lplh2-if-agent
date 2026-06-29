@@ -27,9 +27,16 @@ PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "true").lower() in
 
 # LLM_es settings: summaries and LPLH2 auxiliary reasoning modules.
 # Set a model name such as "o3-mini" to use OpenAI for aux calls. Set ""
-# to run all aux/summarization calls on LLM_a. The current experiment keeps
-# this empty so Qwen2.5-14B handles both action generation and aux work.
+# to run aux/summarization calls on LLM_a.
 LLM_ES_MODEL = os.getenv("LPLH_LLM_ES_MODEL", "")
+
+# Optional dedicated model for affordance brainstorming. When set, only the
+# brainstormer uses this OpenAI model; all other auxiliary modules keep using
+# LLM_ES_MODEL or the LLM_a fallback above.
+LLM_BRAINSTORM_MODEL = os.getenv("LPLH_BRAINSTORM_MODEL", "")
+LLM_BRAINSTORM_REASONING_EFFORT = os.getenv(
+    "LPLH_BRAINSTORM_REASONING_EFFORT", "low"
+).strip()
 
 # Experience library settings
 EXPERIENCE_TOP_K = 3
