@@ -90,10 +90,10 @@ class LLMClient:
                 timeout=config.OPENAI_TIMEOUT_SECONDS,
                 max_retries=config.OPENAI_MAX_RETRIES,
             )
-            effort = config.LLM_BRAINSTORM_REASONING_EFFORT or "default"
+            effort_note = self._brainstorm_reasoning_effort_note()
             logger.info(
-                f"Affordance brainstormer: openai/{config.LLM_BRAINSTORM_MODEL} "
-                f"(reasoning_effort={effort})"
+                f"Affordance brainstormer: openai/{config.LLM_BRAINSTORM_MODEL}"
+                f"{effort_note}"
             )
         elif config.LLM_BRAINSTORM_MODEL:
             logger.warning(
@@ -283,6 +283,16 @@ class LLMClient:
 
     # ── Experience summarization (LLM_es) ──────────────────────
 
+    def _brainstorm_supports_reasoning_effort(self) -> bool:
+        model_name = (config.LLM_BRAINSTORM_MODEL or "").lower()
+        return model_name.startswith(("o1", "o3", "o4"))
+
+    def _brainstorm_reasoning_effort_note(self) -> str:
+        effort = config.LLM_BRAINSTORM_REASONING_EFFORT
+        if effort and self._brainstorm_supports_reasoning_effort():
+            return f" (reasoning_effort={effort})"
+        return ""
+
     def _chat_brainstorm_once(self, prompt: str,
                               max_completion_tokens: int) -> tuple[str, str]:
         """Run one dedicated OpenAI affordance-brainstorm call."""
@@ -292,7 +302,7 @@ class LLMClient:
             "max_completion_tokens": max_completion_tokens,
         }
         effort = config.LLM_BRAINSTORM_REASONING_EFFORT
-        if effort:
+        if effort and self._brainstorm_supports_reasoning_effort():
             kwargs["reasoning_effort"] = effort
         resp = self._brainstorm_client.chat.completions.create(**kwargs)
         choice = resp.choices[0]
@@ -556,10 +566,9 @@ class LLMClient:
                 ),
                 retry_tokens=3072,
             )
-            effort = config.LLM_BRAINSTORM_REASONING_EFFORT or "default"
             self.last_affordance_finish_reason = (
-                f"{finish_reason}; model=openai/{config.LLM_BRAINSTORM_MODEL}; "
-                f"reasoning_effort={effort}"
+                f"{finish_reason}; model=openai/{config.LLM_BRAINSTORM_MODEL}"
+                f"{self._brainstorm_reasoning_effort_note()}"
             )
         elif self._es_client and config.LLM_ES_MODEL:
             response, finish_reason = self._chat_es_json(

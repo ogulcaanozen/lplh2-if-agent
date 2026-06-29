@@ -17,7 +17,7 @@ Keep these outside GitHub, usually in Google Drive:
 - Z-machine ROMs such as `zork1.z5`.
 - FM LoRA adapter, currently expected in Drive as `fm_adapter_v4_autoplay_failures/` by the notebook.
 - Experiment data/logs under `data/`.
-- `OPENAI_API_KEY` is required for the current hybrid experiment because only affordance brainstorming uses `o3-mini` with `reasoning_effort=low`. The current experiment leaves `LPLH_LLM_ES_MODEL` empty so the other auxiliary modules use the local main LLM (`Qwen/Qwen2.5-14B-Instruct`).
+- `OPENAI_API_KEY` is required for the current hybrid experiment because only affordance brainstorming uses `gpt-4.1`. The current experiment leaves `LPLH_LLM_ES_MODEL` empty so the other auxiliary modules use the local main LLM (`Qwen/Qwen2.5-14B-Instruct`).
 
 ## Typical Colab Layout
 
@@ -37,7 +37,7 @@ The notebook can also accept ROMs under `IFGames/games/` depending on the config
 - Main action LLM: usually `Qwen/Qwen2.5-14B-Instruct` in Colab.
 - FM model: `Qwen/Qwen2.5-1.5B-Instruct` plus the LoRA adapter for validation, relation extraction, and action splitting.
 - Auxiliary LLM: local `Qwen/Qwen2.5-14B-Instruct` fallback for summaries, situation memory, environmental-change detection, failed-command reasoning, and repetition evaluation.
-- Affordance brainstorming: `o3-mini` via `LPLH_BRAINSTORM_MODEL=o3-mini` and `LPLH_BRAINSTORM_REASONING_EFFORT=low` in the current experiment.
+- Affordance brainstorming: `gpt-4.1` via `LPLH_BRAINSTORM_MODEL=gpt-4.1` in the current experiment.
 
 ## Notes
 

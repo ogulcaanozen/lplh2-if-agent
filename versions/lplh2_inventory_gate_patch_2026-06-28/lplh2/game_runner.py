@@ -117,9 +117,15 @@ class GameRunner:
         )
         aux_model = config.LLM_ES_MODEL or "LLM_a fallback"
         brainstorm_model = config.LLM_BRAINSTORM_MODEL or aux_model
+        brainstorm_model_lower = (config.LLM_BRAINSTORM_MODEL or "").lower()
         brainstorm_effort = (
             f" (reasoning_effort={config.LLM_BRAINSTORM_REASONING_EFFORT})"
-            if config.LLM_BRAINSTORM_MODEL else ""
+            if (
+                config.LLM_BRAINSTORM_MODEL
+                and config.LLM_BRAINSTORM_REASONING_EFFORT
+                and brainstorm_model_lower.startswith(("o1", "o3", "o4"))
+            )
+            else ""
         )
         self._log_file.write(f"LPLH Run Log — {game_name}\n")
         self._log_file.write(

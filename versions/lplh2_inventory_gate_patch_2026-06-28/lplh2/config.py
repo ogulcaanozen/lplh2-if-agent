@@ -26,7 +26,7 @@ PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "true").lower() in
 )
 
 # LLM_es settings: summaries and LPLH2 auxiliary reasoning modules.
-# Set a model name such as "o3-mini" to use OpenAI for aux calls. Set ""
+# Set a model name such as "o3-mini" or "gpt-4.1" to use OpenAI for aux calls. Set ""
 # to run aux/summarization calls on LLM_a.
 LLM_ES_MODEL = os.getenv("LPLH_LLM_ES_MODEL", "")
 
