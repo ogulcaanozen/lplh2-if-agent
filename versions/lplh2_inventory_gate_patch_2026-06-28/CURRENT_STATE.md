@@ -41,7 +41,9 @@ The notebook can also use a project checkout under:
 MyDrive/lplh/IFGames/
 ```
 
-Set `OPENAI_API_KEY` in Colab Secrets if using the `o3-mini` auxiliary modules.
+`OPENAI_API_KEY` is optional in the current experiment. `LPLH_LLM_ES_MODEL`
+is intentionally empty, so auxiliary modules use the local main LLM
+(`Qwen/Qwen2.5-14B-Instruct`) instead of `o3-mini`.
 
 ## Current Runtime Design
 
@@ -55,13 +57,17 @@ Main LPLH2 modules:
 - `FailedActionMemory`: stores invalid failed commands by location.
 - `StateScopedActionMemory`: stores commands that were unproductive in the exact pre-action state.
 - `FmClient`: fine-tuned Qwen2.5-1.5B + LoRA for action validation, relation extraction, and action splitting.
-- `LLMClient`: main action LLM plus optional OpenAI auxiliary LLM calls.
+- `LLMClient`: main action LLM plus optional OpenAI auxiliary LLM calls. In
+  this snapshot, auxiliary calls default to local LLM_a/Qwen14B.
 
 Typical Colab experiment setup:
 
 - Main action LLM: `Qwen/Qwen2.5-14B-Instruct`.
 - FM model: `Qwen/Qwen2.5-1.5B-Instruct` plus `fm_adapter_v4_autoplay_failures/`.
-- Auxiliary LLM: `o3-mini` for summaries, situation memory, environmental-change detection, affordance brainstorming, failure explanation, and repetition evaluation.
+- Auxiliary LLM: local `Qwen/Qwen2.5-14B-Instruct` fallback for summaries,
+  situation memory, environmental-change detection, affordance brainstorming,
+  failure explanation, and repetition evaluation. Set `LPLH_LLM_ES_MODEL`
+  only to deliberately re-enable an OpenAI auxiliary model such as `o3-mini`.
 
 ## Recent Fixes
 

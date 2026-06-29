@@ -20,7 +20,7 @@ Keep these outside GitHub, usually in Google Drive:
 - Z-machine ROMs such as `zork1.z5`.
 - FM LoRA adapter, currently expected in Drive as `fm_adapter_v4_autoplay_failures/` by the notebook.
 - Experiment data/logs under `data/`.
-- `OPENAI_API_KEY` as an environment variable or Colab secret if using `o3-mini` auxiliary modules.
+- `OPENAI_API_KEY` is optional. The current experiment leaves `LPLH_LLM_ES_MODEL` empty so all auxiliary modules use the local main LLM (`Qwen/Qwen2.5-14B-Instruct`).
 
 ## Typical Colab Layout
 
@@ -39,7 +39,7 @@ The notebook can also accept ROMs under `IFGames/games/` depending on the config
 
 - Main action LLM: usually `Qwen/Qwen2.5-14B-Instruct` in Colab.
 - FM model: `Qwen/Qwen2.5-1.5B-Instruct` plus the LoRA adapter for validation, relation extraction, and action splitting.
-- Auxiliary LLM: `o3-mini` for summaries, situation memory, affordance brainstorming, environmental-change detection, and repetition evaluation when configured.
+- Auxiliary LLM: local `Qwen/Qwen2.5-14B-Instruct` fallback for summaries, situation memory, affordance brainstorming, environmental-change detection, and repetition evaluation. Set `LPLH_LLM_ES_MODEL=o3-mini` only if you deliberately want OpenAI aux calls.
 
 ## Notes
 

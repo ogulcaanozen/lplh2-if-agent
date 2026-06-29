@@ -147,30 +147,40 @@ class LLMClient:
             return False
 
     def chat(self, system_prompt: str, user_prompt: str, temperature: float = None,
-             think: bool = False) -> str:
+             think: bool = False, max_new_tokens: int = None) -> str:
         temp = temperature if temperature is not None else self.temperature
         if self.provider == "ollama":
-            return self._chat_ollama(system_prompt, user_prompt, temp, think=think)
+            return self._chat_ollama(
+                system_prompt, user_prompt, temp, think=think,
+                max_new_tokens=max_new_tokens,
+            )
         if self.provider == "huggingface":
-            return self._chat_hf(system_prompt, user_prompt, temp)
+            return self._chat_hf(system_prompt, user_prompt, temp,
+                                 max_new_tokens=max_new_tokens)
         if self.provider == "openai":
-            return self._chat_openai(system_prompt, user_prompt, temp)
+            return self._chat_openai(system_prompt, user_prompt, temp,
+                                     max_new_tokens=max_new_tokens)
 
-    def _chat_ollama(self, system_prompt, user_prompt, temperature, think=False):
+    def _chat_ollama(self, system_prompt, user_prompt, temperature, think=False,
+                     max_new_tokens=None):
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
         use_think = think and self._thinking_supported
+        options = {"temperature": temperature}
+        if max_new_tokens:
+            options["num_predict"] = int(max_new_tokens)
         response = self._ollama.chat(
             model=self.model,
             messages=messages,
-            options={"temperature": temperature},
+            options=options,
             think=use_think,
         )
         return response["message"]["content"]
 
-    def _chat_hf(self, system_prompt, user_prompt, temperature):
+    def _chat_hf(self, system_prompt, user_prompt, temperature,
+                 max_new_tokens=None):
         torch = self._torch
         messages = []
         if system_prompt:
@@ -184,7 +194,7 @@ class LLMClient:
         # transformers emits a "temperature is ignored under greedy decoding"
         # warning every call.
         gen_kwargs = {
-            "max_new_tokens": 1024,
+            "max_new_tokens": int(max_new_tokens or 1024),
             "do_sample": temperature > 0,
             "pad_token_id": self._hf_tokenizer.pad_token_id,
         }
@@ -196,17 +206,32 @@ class LLMClient:
         gen_ids = out[0][inputs.input_ids.shape[1]:]
         return self._hf_tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
-    def _chat_openai(self, system_prompt, user_prompt, temperature):
+    def _chat_openai(self, system_prompt, user_prompt, temperature,
+                     max_new_tokens=None):
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_new_tokens:
+            kwargs["max_completion_tokens"] = int(max_new_tokens)
         response = self._openai.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
+            **kwargs,
         )
         return response.choices[0].message.content
+
+    def _chat_aux_fallback(self, prompt: str, max_new_tokens: int) -> str:
+        """Run auxiliary work on LLM_a with deterministic decoding."""
+        return self.chat(
+            "",
+            prompt,
+            temperature=0.0,
+            max_new_tokens=max_new_tokens,
+        )
 
     def _chat_es_once(self, prompt: str, max_completion_tokens: int) -> tuple[str, str]:
         """Run one OpenAI aux/summarization call and return visible text + finish reason."""
@@ -260,7 +285,7 @@ class LLMClient:
             )
             response = resp.choices[0].message.content
         else:
-            response = self.chat("", prompt, temperature=self.temperature)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=2048)
 
         self.last_summary_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -294,7 +319,8 @@ class LLMClient:
             )
             self.last_situation_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=1536)
+            self.last_situation_finish_reason = "llm_a_qwen14b"
 
         self.last_situation_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -330,7 +356,8 @@ class LLMClient:
             )
             self.last_situation_resolution_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=1536)
+            self.last_situation_resolution_finish_reason = "llm_a_qwen14b"
 
         self.last_situation_resolution_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -365,7 +392,8 @@ class LLMClient:
             )
             self.last_environmental_change_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=768)
+            self.last_environmental_change_finish_reason = "llm_a_qwen14b"
 
         self.last_environmental_change_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -419,7 +447,8 @@ class LLMClient:
             )
             self.last_auxiliary_gate_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=1024)
+            self.last_auxiliary_gate_finish_reason = "llm_a_qwen14b"
 
         self.last_auxiliary_gate_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -473,7 +502,8 @@ class LLMClient:
             )
             self.last_affordance_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=3072)
+            self.last_affordance_finish_reason = "llm_a_qwen14b"
 
         self.last_affordance_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -504,7 +534,8 @@ class LLMClient:
             )
             self.last_failure_reason_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=768)
+            self.last_failure_reason_finish_reason = "llm_a_qwen14b"
 
         self.last_failure_reason_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -543,7 +574,8 @@ class LLMClient:
             )
             self.last_repetition_eval_finish_reason = finish_reason
         else:
-            response = self.chat("", prompt, temperature=0.0)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=768)
+            self.last_repetition_eval_finish_reason = "llm_a_qwen14b"
 
         self.last_repetition_eval_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
@@ -596,7 +628,7 @@ class LLMClient:
             )
             response = resp.choices[0].message.content
         else:
-            response = self.chat("", prompt, temperature=self.temperature)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=2048)
 
         self.last_summary_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
