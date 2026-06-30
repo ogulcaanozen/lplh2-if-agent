@@ -8,6 +8,7 @@ Updated after every step via LLM-based relation extraction.
 import json
 import copy
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,8 @@ class KGMap:
                 loc = self._resolve_location_subject(subj_clean, new_location)
                 if loc:
                     self._ensure_node(loc)
-                    if obj_clean not in self.nodes[loc]["have"]:
+                    if (self._should_store_room_object(loc, obj_clean)
+                            and obj_clean not in self.nodes[loc]["have"]):
                         self.nodes[loc]["have"].append(obj_clean)
                 else:
                     self._add_object_relation(new_location or self.current_location,
@@ -77,11 +79,16 @@ class KGMap:
                 loc = self._resolve_location_subject(subj_clean, new_location)
                 if loc:
                     self._ensure_node(loc)
-                    self.nodes[loc]["direction"][rel_lower] = obj_clean
+                    direction = self._canonical_direction(rel_lower)
+                    if self._is_placeholder_destination(obj_clean, direction):
+                        if direction not in self.nodes[loc]["may_direction"]:
+                            self.nodes[loc]["may_direction"].append(direction)
+                        continue
+                    self.nodes[loc]["direction"][direction] = obj_clean
                     # Direction is now confirmed — remove from may_direction
                     may = self.nodes[loc]["may_direction"]
-                    if rel_lower in may:
-                        may.remove(rel_lower)
+                    if direction in may:
+                        may.remove(direction)
 
             # Handle requirements: <Location, need/require, action>
             elif rel_lower in ("need", "require"):
@@ -104,6 +111,11 @@ class KGMap:
             self.current_location = new_location
             if new_location not in self.visited_rooms:
                 self.visited_rooms.append(new_location)
+
+        # Inventory is modeled separately as temp_have. If relation extraction
+        # re-adds carried items to room object lists, remove those stale copies.
+        for carried in self.inventory:
+            self._remove_item_from_world(carried.lower())
 
     def take_item(self, item: str):
         """Record a successfully taken item: add to inventory, remove from room.
@@ -164,8 +176,27 @@ class KGMap:
         if relation_row not in self.nodes[loc]["relations"]:
             self.nodes[loc]["relations"].append(relation_row)
         for item in [subject, obj]:
-            if item and item not in self.nodes[loc]["have"]:
+            if (self._should_store_room_object(loc, item)
+                    and item not in self.nodes[loc]["have"]):
                 self.nodes[loc]["have"].append(item)
+
+    def _should_store_room_object(self, loc: str, item: str) -> bool:
+        """Return False for room names, carried items, and empty scenery leaks."""
+        item_clean = str(item or "").strip()
+        if not item_clean:
+            return False
+        item_lower = item_clean.lower()
+        if item_lower in {"you", "[location]"}:
+            return False
+        if loc and item_lower == loc.lower():
+            return False
+        if any(item_lower == room.lower() for room in self.nodes):
+            return False
+        if any(item_lower == room.lower() for room in self.visited_rooms):
+            return False
+        if any(item_lower == carried.lower() for carried in self.inventory):
+            return False
+        return True
 
     def _remove_item_from_world(self, item_lower: str):
         """Remove a carried/consumed item from room object lists and relations."""
@@ -208,6 +239,42 @@ class KGMap:
             "u", "d",
         }
 
+    def _canonical_direction(self, direction: str) -> str:
+        """Normalize direction abbreviations to full direction names."""
+        mapping = {
+            "n": "north",
+            "s": "south",
+            "e": "east",
+            "w": "west",
+            "ne": "northeast",
+            "nw": "northwest",
+            "se": "southeast",
+            "sw": "southwest",
+            "u": "up",
+            "d": "down",
+        }
+        direction_lower = direction.strip().lower()
+        return mapping.get(direction_lower, direction_lower)
+
+    def _is_placeholder_destination(self, destination: str, direction: str) -> bool:
+        """True when a direction triple has no real destination room."""
+        dest = re.sub(r"\s+", " ", str(destination or "").strip().lower())
+        direction = self._canonical_direction(direction)
+        if not dest:
+            return True
+        placeholders = {
+            direction,
+            f"to {direction}",
+            f"the {direction}",
+            f"toward {direction}",
+            f"towards {direction}",
+            f"go {direction}",
+            f"going {direction}",
+            f"{direction} direction",
+            f"the {direction} direction",
+        }
+        return dest in placeholders
+
     def mark_direction_tried(self, direction: str):
         """Mark a failed direction at the CURRENT location as invalid.
 
@@ -217,7 +284,7 @@ class KGMap:
         rejects that direction, we must purge it from both structures so the agent
         never retries it.
         """
-        direction_lower = direction.strip().lower()
+        direction_lower = self._canonical_direction(direction)
         if self.current_location and self.current_location in self.nodes:
             node = self.nodes[self.current_location]
             may = node["may_direction"]
@@ -234,7 +301,7 @@ class KGMap:
         and we need to update the SOURCE room, not the destination.
         Removes from both may_direction and direction (handles false relation-extractor triples).
         """
-        direction_lower = direction.strip().lower()
+        direction_lower = self._canonical_direction(direction)
         if location and location in self.nodes:
             node = self.nodes[location]
             may = node["may_direction"]
@@ -249,10 +316,10 @@ class KGMap:
         Called as a backup when the relation extractor fails to produce the
         direction triple for a successful movement command.
         """
-        direction_lower = direction.strip().lower()
+        direction_lower = self._canonical_direction(direction)
         if from_location and from_location in self.nodes:
             node = self.nodes[from_location]
-            if direction_lower not in node["direction"]:
+            if to_location and not self._is_placeholder_destination(to_location, direction_lower):
                 node["direction"][direction_lower] = to_location
             may = node["may_direction"]
             if direction_lower in may:
