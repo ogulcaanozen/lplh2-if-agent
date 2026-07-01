@@ -156,9 +156,7 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Inventory Check**: Identify items on hand (keys, tools, etc.) that might solve current puzzles or overcome obstacles.
 - **Inventory Is Authoritative**: Treat only items listed in the current inventory/map inventory as carried. A visible object, an opened object, or an object whose state changed is not in your possession unless it appears in inventory.
 - **Visible Tools Must Be Taken First**: If a visible object could solve a stored situation but is not in inventory, consider taking it before using it or leaving the room. For example, if a light source is visible but not carried, preparation should include taking it before relying on it in a dark area.
-- **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
-- **Active Situation Plan**: If a plan is present, treat it as advisory. It marks a stored situation that may now be worth pursuing. You are not forced to follow it, but if it fits the current observation, inventory, and map, consider it seriously. Before following it, verify that any required item is actually in inventory; if it is only visible nearby, take it first.
-- **BFS Navigation Hint**: If you decide to pursue the active plan and it includes a "route_found" navigation hint, use the hint's "next_command" as the immediate navigation command. Do not output a multi-step route as one command.
+- **Stored Situations**: Review unresolved hazards/blockers from earlier. A stored situation may include a possible_solution sentence. If your current location, inventory, visible objects, or known map makes that possible solution actionable now, consider addressing it; otherwise continue useful exploration.
 - **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
 - **Condition-Level Agenda**: Some affordance agenda entries may have "kind": "condition"; these target a room/environment/perception/parser condition rather than one visible object. Consider them when recent observations suggest normal commands are being distorted, obscured, blocked, or mismatched.
 - **Known Failed Commands Here**: These commands failed before at this location under the recorded world state. Avoid repeating them unless the current observation, inventory, visible objects, or score have changed enough to give a concrete reason to retry.
@@ -185,7 +183,7 @@ Your internal reasoning steps Here.
 ---
 **Adaptation and Fallback Rules**
 1. **Priority Usage**
-- **Highest Priority**: Current inventory and active situation plans that are concretely relevant now.
+- **Highest Priority**: Current inventory and stored situations whose possible_solution is concretely relevant now.
 - **Next**: Visible objects, pending affordance agenda commands, and confirmed exits in the current room.
 - **Then**: Untried exits/frontier entries when exploration is the best next step.
 2. **Conflict Resolution**
@@ -219,9 +217,6 @@ Your internal reasoning steps Here.
 
 === ACTIVE STORED SITUATIONS ===
 {stored_situations}
-
-=== ACTIVE SITUATION PLAN (ADVISORY) ===
-{active_plan_context}
 
 === CURRENT SCORE ===
 {score}
@@ -507,16 +502,14 @@ Make exactly these decisions:
    - Set "run": true when the latest step may require situation-memory work:
      a new unresolved hazard/blocker/missing condition may need to be stored;
      an existing stored situation may be solved, obsolete, or need rewriting;
-     a visible object or inventory item may help an active stored situation;
-     an active plan may need to be created, updated, kept, or cleared; or the
-     latest action may have completed, advanced, failed, or invalidated part of
-     an active plan.
+     or a visible object, inventory item, learned command, route, or changed
+     world state may suggest or refine a possible_solution for an active stored
+     situation.
    - Also set true for death, score changes, inventory changes, meaningful world
-     changes, or observations that directly mention an active stored situation.
+   changes, or observations that directly mention an active stored situation.
    - Set false for ordinary room descriptions, generic navigation, repeated
      no-effect observations, parser errors with no blocker, or object
-     interactions unrelated to any blocker, hazard, stored situation, or active
-     plan.
+     interactions unrelated to any blocker, hazard, or stored situation.
 
 4. Affordance brainstorming
    - Set "run": true when fresh local/inventory command ideas may help the next
@@ -595,7 +588,6 @@ Inventory Before This Step: {inventory_before}
 Current Inventory: {inventory}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
-Active Plan Already Stored: {active_plan}
 Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
 Recent Command Outcomes Here: {recent_command_outcomes}
@@ -604,8 +596,8 @@ Cached Affordance Ideas Available For This State: {cached_affordance_ideas_avail
 
 
 # ---------------------------------------------------------------------
-# LPLH2 Enhancement: Unified Situation Manager
-# Handles stored situations and one advisory active plan in a single call.
+# LPLH2 Enhancement: Situation Manager
+# Maintains compact unresolved situations with possible-solution notes.
 # ---------------------------------------------------------------------
 SITUATION_MANAGER_PROMPT = """<START OF INSTRUCTIONS>
 You manage situation memory for a text-based interactive fiction agent.
@@ -617,23 +609,23 @@ A stored situation is a concrete unresolved hazard, blocker, missing condition,
 or future-return problem that may become solvable after the player finds a
 useful object, learns a command, changes the world, or prepares differently.
 
-You may do four things:
+Each active situation has this compact format:
+{{
+  "id": "stable id assigned by code",
+  "location": "where the unresolved problem exists",
+  "situation": "short description of the unresolved problem",
+  "possible_solution": "short current best hypothesis, or empty string"
+}}
+
+You may do three things:
 1. Add new stored situations.
-2. Update existing stored situations when the same problem should be rewritten
-   more accurately.
+2. Update existing stored situations, especially the possible_solution field.
 3. Remove solved, obsolete, or disproven situations.
-4. Create, update, keep, clear, or do nothing with one advisory active plan.
 
 Current Inventory is authoritative. Only say the agent has/carries/possesses an
 item if it appears in Current Inventory. If a useful object is visible but not
-in Current Inventory, an active plan should include taking it before using it or
-traveling to the target.
-
-Plans are advisory. They should help the main action LLM reason, not force it.
-Keep plans short and concrete:
-- suggested_preparation: commands to consider before traveling/trying the target
-- target_goal: what to accomplish at the target; exact target commands are the
-  affordance brainstorming module's job
+in Current Inventory, possible_solution should say that it is visible but not
+carried. If the useful object is carried, possible_solution should say that.
 
 Return JSON only between |start| and |end|:
 
@@ -641,28 +633,23 @@ Return JSON only between |start| and |end|:
 {{
   "stored_situations": {{
     "add": [
-      {{"location": "where to remember/return", "situation": "short unresolved problem"}}
+      {{
+        "location": "where to remember/return",
+        "situation": "short unresolved problem",
+        "possible_solution": "short solution hypothesis or empty string"
+      }}
     ],
     "update": [
       {{
-        "from": {{"location": "existing location", "situation": "existing situation"}},
-        "to": {{"location": "new location", "situation": "new situation"}}
+        "id": "copy exact id from Active Stored Situations",
+        "location": "updated or same location",
+        "situation": "updated or same situation",
+        "possible_solution": "updated solution hypothesis or empty string"
       }}
     ],
     "remove": [
-      {{"location": "existing location", "situation": "existing situation", "reason": "why it is solved/obsolete"}}
+      {{"id": "copy exact id from Active Stored Situations", "reason": "why it is solved/obsolete"}}
     ]
-  }},
-  "active_plan": {{
-    "action": "create, update, keep, clear, none",
-    "target_location": "target room/location, or empty",
-    "related_situation": {{
-      "location": "matching stored situation location, or empty",
-      "situation": "matching stored situation text, or empty"
-    }},
-    "reason": "short observation-based reason",
-    "suggested_preparation": ["short commands to consider before target"],
-    "target_goal": "short goal to pursue at the target"
   }}
 }}
 |end|
@@ -670,82 +657,93 @@ Return JSON only between |start| and |end|:
 Rules:
 - Use "add" only for new unresolved problems, not ordinary objects or normal
   room descriptions.
-- Use "update" only when an existing situation remains active but should be
-  made more accurate.
+- Use "update" only when an existing situation remains active but its location,
+  wording, or possible_solution should be rewritten.
+- For update/remove, prefer the exact id from Active Stored Situations.
 - Use "remove" only when the latest observation, inventory, score, or world
   change directly shows the stored situation is solved, obsolete, or wrong.
-- Use active_plan.action="create" when no active plan exists and the current
-  state makes a stored situation worth actively considering.
-- Use "update" when the latest action, inventory, observation, or visible
-  object changes the next useful steps for the active plan.
-- Use "keep" when an active plan remains useful and needs no semantic change.
-- Use "clear" when the plan has been attempted, solved, invalidated, or no
-  longer matches any active situation.
-- Use "none" when no active plan exists and no plan should be created.
 - Do not invent hidden game knowledge. Use only the provided state.
-- If a plan depends on an item that is visible but not carried, include a take
-  or get command before any use command. Example: visible lantern + remembered
-  dark area + lantern not in inventory -> ["take lantern", "turn on lantern"].
+- Keep possible_solution as one concise sentence. It can be empty when no
+  plausible solution is known yet.
+- If a possible solution depends on an item that is visible but not carried,
+  mention that it must be taken first.
+- If a possible solution depends on a carried item, mention that it is carried
+  and what kind of use may help.
 
 Good examples:
 
-Example 1: visible useful object not carried
-Current Inventory: ["sword"]
-Visible Objects Here: ["lantern"]
-Active Stored Situations: [{{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}}]
-Active Plan Already Stored: null
+Example 1: new unresolved problem, no known solution yet
+Current Location: Kitchen / upstairs
+Observation After Action: It is pitch black. You are likely to be eaten by a grue.
+Active Stored Situations: []
 Output:
 |start|
 {{
-  "stored_situations": {{"add": [], "update": [], "remove": []}},
-  "active_plan": {{
-    "action": "create",
-    "target_location": "Kitchen / upstairs",
-    "related_situation": {{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}},
-    "reason": "The lantern is visible and may address the remembered dark area, but it is not in inventory.",
-    "suggested_preparation": ["take lantern", "turn on lantern"],
-    "target_goal": "safely explore the remembered dark upstairs area with light"
+  "stored_situations": {{
+    "add": [
+      {{
+        "location": "Kitchen / upstairs",
+        "situation": "dark upstairs area may be dangerous without light",
+        "possible_solution": ""
+      }}
+    ],
+    "update": [],
+    "remove": []
   }}
 }}
 |end|
 
-Example 2: preparation completed semantically
+Example 2: visible useful object not carried
+Current Inventory: ["sword"]
+Visible Objects Here: ["lantern"]
+Active Stored Situations: [{{"id": "situation_001", "location": "Kitchen / upstairs", "situation": "dark upstairs area may be dangerous without light", "possible_solution": ""}}]
+Output:
+|start|
+{{
+  "stored_situations": {{
+    "add": [],
+    "update": [
+      {{
+        "id": "situation_001",
+        "location": "Kitchen / upstairs",
+        "situation": "dark upstairs area may be dangerous without light",
+        "possible_solution": "The lantern visible here may help with the dark area, but it is not carried yet."
+      }}
+    ],
+    "remove": []
+  }}
+}}
+|end|
+
+Example 3: useful object now carried
 Previous Action: get lantern
 Observation After Action: Taken.
 Current Inventory: ["sword", "lantern"]
-Active Plan Already Stored: {{"target_location":"Kitchen / upstairs","related_situation":{{"location":"Kitchen / upstairs","situation":"dark upstairs area may require light"}},"suggested_preparation":["take lantern","turn on lantern"],"target_goal":"safely explore the remembered dark upstairs area with light"}}
+Active Stored Situations: [{{"id": "situation_001", "location": "Kitchen / upstairs", "situation": "dark upstairs area may be dangerous without light", "possible_solution": "The lantern visible here may help with the dark area, but it is not carried yet."}}]
 Output:
 |start|
 {{
-  "stored_situations": {{"add": [], "update": [], "remove": []}},
-  "active_plan": {{
-    "action": "update",
-    "target_location": "Kitchen / upstairs",
-    "related_situation": {{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}},
-    "reason": "The lantern is now in inventory, so only turning it on remains before trying the dark area.",
-    "suggested_preparation": ["turn on lantern"],
-    "target_goal": "safely explore the remembered dark upstairs area with light"
+  "stored_situations": {{
+    "add": [],
+    "update": [
+      {{
+        "id": "situation_001",
+        "location": "Kitchen / upstairs",
+        "situation": "dark upstairs area may be dangerous without light",
+        "possible_solution": "The carried lantern may help; try turning it on before exploring the dark area."
+      }}
+    ],
+    "remove": []
   }}
 }}
 |end|
 
-Example 3: no situation work needed
+Example 4: no situation work needed
 Observation After Action: You can't go that way.
 Active Stored Situations: []
-Active Plan Already Stored: null
 Output:
 |start|
-{{
-  "stored_situations": {{"add": [], "update": [], "remove": []}},
-  "active_plan": {{
-    "action": "none",
-    "target_location": "",
-    "related_situation": {{"location": "", "situation": ""}},
-    "reason": "No unresolved future-return situation or active plan is affected.",
-    "suggested_preparation": [],
-    "target_goal": ""
-  }}
-}}
+{{"stored_situations": {{"add": [], "update": [], "remove": []}}}}
 |end|
 
 <END OF INSTRUCTIONS>
@@ -762,7 +760,6 @@ Inventory Before This Step: {inventory_before}
 Current Inventory: {inventory}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
-Active Plan Already Stored: {active_plan}
 Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
 Recent Command Outcomes Here: {recent_command_outcomes}
@@ -1075,7 +1072,8 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 **What To Consider:**
 1. Visible objects and room features in the current observation. For each important object, think of natural commands a player might try.
 2. Inventory items and how they might be used now.
-3. Active stored situations that may now be addressable because of the current room, inventory, or visible objects.
+3. Active stored situations, especially their possible_solution text, when the
+   current room, inventory, or visible objects make them addressable.
 4. Recent failed commands. If a command failed because the syntax was too specific, suggest simpler alternatives.
 5. Known failed commands at this exact location. Avoid those exact commands unless the current observation, inventory, visible objects, or score have changed enough to make retrying reasonable.
 6. Failed command verbs as cautionary evidence. Do not treat a failed verb as globally impossible; a verb can fail on one object and still work on another. Use this mainly to avoid repeating the same failed use.
@@ -1083,10 +1081,6 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 8. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
 9. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
 10. Recent same-location command outcomes. If several different commands in the same location produce similarly repeated, echoed, garbled, obscured, blocked, mismatched, or condition-dominated observations, consider whether a persistent environmental/perceptual/mental/parser-like condition is interfering with normal command effects.
-11. Active Plan. If an advisory active plan exists, consider its target_goal and
-    suggested_preparation when proposing commands. Do not blindly follow the
-    plan, but do propose concrete commands that help with it when they fit the
-    current room, inventory, visible objects, or stored situation.
 
 **Output Rules:**
 - Output JSON only between |start| and |end|.
@@ -1119,8 +1113,7 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 Current Location: Living Room
 Observation: "There is a trophy case here. A battery-powered brass lantern is on the trophy case. Above the trophy case hangs an elvish sword. There is a large oriental rug in the center of the room."
 Inventory: ["sack", "bottle"]
-Active Stored Situations: [{{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}}]
-Active Plan: {{"target_location":"Kitchen / upstairs","related_situation":{{"location":"Kitchen / upstairs","situation":"dark upstairs area may require light"}},"suggested_preparation":["take lantern","turn on lantern"],"target_goal":"safely explore the remembered dark upstairs area with light"}}
+Active Stored Situations: [{{"id": "situation_001", "location": "Kitchen / upstairs", "situation": "dark upstairs area may require light", "possible_solution": "The lantern visible in this room may help, but it is not carried yet."}}]
 Recent Failed Commands: ["take lantern from trophy case"]
 Output:
 |start|
@@ -1222,7 +1215,6 @@ Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}
 Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
-Active Plan: {active_plan}
 Learned Action Space Here: {action_space}
 Retrieved Experiences: {experiences}"""
 

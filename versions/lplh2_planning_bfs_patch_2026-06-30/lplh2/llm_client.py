@@ -438,12 +438,11 @@ class LLMClient:
                           observation: str, score: int, reward_change: int,
                           inventory_before: list, inventory: list,
                           visible_objects: list, active_situations: list,
-                          active_plan: dict | None,
                           recent_failed_commands: list,
                           known_failed_commands_here: str,
                           recent_command_outcomes: list,
                           same_state_tried_commands: list) -> str:
-        """Manage stored situations and one advisory active plan in one call."""
+        """Manage enriched stored situations in one call."""
         prompt = SITUATION_MANAGER_PROMPT.format(
             location=location or "unknown",
             previous_location=previous_location or "unknown",
@@ -457,7 +456,6 @@ class LLMClient:
             inventory=json.dumps(inventory or [], ensure_ascii=False),
             visible_objects=json.dumps(visible_objects or [], ensure_ascii=False),
             active_situations=json.dumps(active_situations or [], ensure_ascii=False),
-            active_plan=json.dumps(active_plan or None, ensure_ascii=False),
             recent_failed_commands=json.dumps(recent_failed_commands or [], ensure_ascii=False),
             known_failed_commands_here=known_failed_commands_here or "[]",
             recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
@@ -529,7 +527,6 @@ class LLMClient:
                                inventory_before: list,
                                inventory: list, visible_objects: list,
                                active_situations: list,
-                               active_plan: dict | None,
                                recent_failed_commands: list,
                                known_failed_commands_here: str,
                                recent_command_outcomes: list,
@@ -549,7 +546,6 @@ class LLMClient:
             inventory=json.dumps(inventory or [], ensure_ascii=False),
             visible_objects=json.dumps(visible_objects or [], ensure_ascii=False),
             active_situations=json.dumps(active_situations or [], ensure_ascii=False),
-            active_plan=json.dumps(active_plan or None, ensure_ascii=False),
             recent_failed_commands=json.dumps(recent_failed_commands or [], ensure_ascii=False),
             known_failed_commands_here=known_failed_commands_here or "[]",
             recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
@@ -589,7 +585,6 @@ class LLMClient:
                                same_state_tried_commands: list,
                                pending_carryover_commands: list,
                                stored_situations: list,
-                               active_plan: dict | None,
                                action_space: str,
                                experiences: str,
                                score: int = 0) -> str:
@@ -607,7 +602,6 @@ class LLMClient:
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
             pending_carryover_commands=json.dumps(pending_carryover_commands or [], ensure_ascii=False),
             stored_situations=json.dumps(stored_situations or [], ensure_ascii=False),
-            active_plan=json.dumps(active_plan or None, ensure_ascii=False),
             action_space=action_space or "No learned action-space context available.",
             experiences=experiences or "No relevant experiences found yet.",
             score=score,

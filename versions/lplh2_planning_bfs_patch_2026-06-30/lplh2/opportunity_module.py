@@ -19,10 +19,12 @@ class SituationMemory:
     def __init__(self):
         self._situations: list[dict[str, str]] = []
         self._keys: set[str] = set()
+        self._next_id = 1
 
     def reset(self):
         self._situations = []
         self._keys = set()
+        self._next_id = 1
 
     def active_situations(self) -> list[dict[str, str]]:
         return [dict(item) for item in self._situations]
@@ -61,10 +63,15 @@ class SituationMemory:
 
         location = self._clean_field(parsed.get("location"))
         situation = self._clean_field(parsed.get("situation"))
+        possible_solution = self._clean_field(parsed.get("possible_solution"))
         if not location or not situation:
             return None, "response missing location or situation"
 
-        return {"location": location, "situation": situation}, None
+        return {
+            "location": location,
+            "situation": situation,
+            "possible_solution": possible_solution,
+        }, None
 
     def parse_resolution_response(self, text: str) -> tuple[list[dict[str, str]], Optional[str]]:
         """Parse a list of active situations that the LLM says are now solved."""
@@ -96,15 +103,19 @@ class SituationMemory:
             location = self._clean_field(item.get("location"))
             situation = self._clean_field(item.get("situation"))
             if location and situation:
-                resolved.append({"location": location, "situation": situation})
+                resolved.append({
+                    "id": self._clean_id(item.get("id")),
+                    "location": location,
+                    "situation": situation,
+                    "possible_solution": self._clean_field(item.get("possible_solution")),
+                })
         return resolved, None
 
     def add(self, situation: dict[str, str]) -> tuple[bool, dict[str, str]]:
         """Add a situation if not already present."""
-        normalized = {
-            "location": self._clean_field(situation.get("location")) or "unknown",
-            "situation": self._clean_field(situation.get("situation")) or "",
-        }
+        normalized = self._normalize_record(situation)
+        if not normalized["id"]:
+            normalized["id"] = self._allocate_id()
         key = self._key(normalized)
         if not normalized["situation"] or key in self._keys:
             return False, normalized
@@ -115,28 +126,44 @@ class SituationMemory:
 
     def remove(self, situation: dict[str, str]) -> bool:
         """Remove a stored situation. Reserved for the later solver step."""
-        key = self._key(situation)
-        if key not in self._keys:
+        index = self._find_index(situation)
+        if index is None:
             return False
-        self._situations = [s for s in self._situations if self._key(s) != key]
-        self._keys.remove(key)
+        old = self._situations.pop(index)
+        self._keys.discard(self._key(old))
         return True
 
     def update(self, old: dict[str, str], new: dict[str, str]) -> tuple[bool, dict[str, str]]:
         """Rewrite an existing situation without creating a duplicate on mismatch."""
-        normalized = {
-            "location": self._clean_field(new.get("location")) or "unknown",
-            "situation": self._clean_field(new.get("situation")) or "",
-        }
-        if not normalized["situation"] or self._key(old) not in self._keys:
+        index = self._find_index(old)
+        if index is None:
+            normalized = self._normalize_record(new)
             return False, normalized
-        removed = self.remove(old)
-        added, normalized = self.add(normalized)
-        return bool(removed or added), normalized
+
+        existing = self._situations[index]
+        normalized = self._normalize_record(new, fallback=existing)
+        normalized["id"] = existing["id"]
+        if not normalized["situation"]:
+            return False, normalized
+
+        new_key = self._key(normalized)
+        for idx, item in enumerate(self._situations):
+            if idx != index and self._key(item) == new_key:
+                return False, dict(item)
+
+        self._keys.discard(self._key(existing))
+        self._situations[index] = normalized
+        self._keys.add(new_key)
+        return True, normalized
 
     def key_for(self, situation: dict[str, str]) -> str:
         """Return the normalized internal key for equality checks."""
         return self._key(situation)
+
+    def get(self, situation: dict[str, str]) -> Optional[dict[str, str]]:
+        """Return a stored situation by id or content key."""
+        index = self._find_index(situation)
+        return dict(self._situations[index]) if index is not None else None
 
     def _extract_body(self, text: str) -> str:
         raw = str(text or "").strip()
@@ -164,6 +191,7 @@ class SituationMemory:
         return {
             "location": location_match.group(1),
             "situation": situation_match.group(1),
+            "possible_solution": "",
         }
 
     def _parse_loose_resolution_json(self, body: str) -> Optional[list[dict[str, str]]]:
@@ -174,6 +202,58 @@ class SituationMemory:
         if value is None:
             return ""
         return re.sub(r"\s+", " ", str(value)).strip()
+
+    def _clean_id(self, value: Any) -> str:
+        text = self._clean_field(value)
+        if not text:
+            return ""
+        return re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_")
+
+    def _normalize_record(self, situation: dict[str, str],
+                          fallback: dict[str, str] | None = None) -> dict[str, str]:
+        if not isinstance(situation, dict):
+            situation = {}
+        fallback = fallback or {}
+        possible_solution = (
+            self._clean_field(situation.get("possible_solution"))
+            if "possible_solution" in situation
+            else self._clean_field(fallback.get("possible_solution"))
+        )
+        return {
+            "id": self._clean_id(situation.get("id")) or self._clean_id(fallback.get("id")),
+            "location": (
+                self._clean_field(situation.get("location"))
+                or self._clean_field(fallback.get("location"))
+                or "unknown"
+            ),
+            "situation": (
+                self._clean_field(situation.get("situation"))
+                or self._clean_field(fallback.get("situation"))
+                or ""
+            ),
+            "possible_solution": possible_solution,
+        }
+
+    def _find_index(self, situation: dict[str, str]) -> Optional[int]:
+        situation_id = self._clean_id(situation.get("id") if isinstance(situation, dict) else "")
+        if situation_id:
+            for idx, item in enumerate(self._situations):
+                if item.get("id") == situation_id:
+                    return idx
+        key = self._key(situation)
+        if key and key in self._keys:
+            for idx, item in enumerate(self._situations):
+                if self._key(item) == key:
+                    return idx
+        return None
+
+    def _allocate_id(self) -> str:
+        existing = {item.get("id", "") for item in self._situations}
+        while True:
+            candidate = f"situation_{self._next_id:03d}"
+            self._next_id += 1
+            if candidate not in existing:
+                return candidate
 
     def _key(self, situation: dict[str, str]) -> str:
         location = self._normalize(situation.get("location", ""))

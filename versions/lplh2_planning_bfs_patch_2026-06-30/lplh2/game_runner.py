@@ -54,7 +54,6 @@ class GameRunner:
         self._action_failure_log_file = None
         self._action_generation_log_file = None
         self._auxiliary_gate_log_file = None
-        self._planning_nav_log_file = None
         self._run_timestamp = None
         self._experiment_log_dir = None
         self._run_log_path = None
@@ -64,7 +63,6 @@ class GameRunner:
         self._action_failure_log_path = None
         self._action_generation_log_path = None
         self._auxiliary_gate_log_path = None
-        self._planning_nav_log_path = None
         self._results_path = None
         self._step_log_path = None
         self._all_step_logs = []
@@ -96,7 +94,6 @@ class GameRunner:
         action_failure_log_path = os.path.join(self._experiment_log_dir, "action_failure_memory_log.txt")
         action_generation_log_path = os.path.join(self._experiment_log_dir, "action_generation_log.txt")
         auxiliary_gate_log_path = os.path.join(self._experiment_log_dir, "auxiliary_gate_log.txt")
-        planning_nav_log_path = os.path.join(self._experiment_log_dir, "planning_navigation_log.txt")
         self._run_log_path = log_path
         self._summary_log_path = summary_log_path
         self._situation_log_path = situation_log_path
@@ -104,7 +101,6 @@ class GameRunner:
         self._action_failure_log_path = action_failure_log_path
         self._action_generation_log_path = action_generation_log_path
         self._auxiliary_gate_log_path = auxiliary_gate_log_path
-        self._planning_nav_log_path = planning_nav_log_path
         self._step_log_path = os.path.join(self._experiment_log_dir, "steplog.json")
         self._log_file = open(log_path, "w", encoding="utf-8", buffering=1)
         self._summary_log_file = open(summary_log_path, "w", encoding="utf-8", buffering=1)
@@ -118,9 +114,6 @@ class GameRunner:
         )
         self._auxiliary_gate_log_file = open(
             auxiliary_gate_log_path, "w", encoding="utf-8", buffering=1
-        )
-        self._planning_nav_log_file = open(
-            planning_nav_log_path, "w", encoding="utf-8", buffering=1
         )
         aux_model = config.LLM_ES_MODEL or "LLM_a fallback"
         brainstorm_model = config.LLM_BRAINSTORM_MODEL or aux_model
@@ -179,12 +172,6 @@ class GameRunner:
             f"LLM_es: {aux_model}\n"
         )
         self._auxiliary_gate_log_file.write("=" * 70 + "\n")
-        self._planning_nav_log_file.write(f"LPLH2 Planning + BFS Navigation Log - {game_name}\n")
-        self._planning_nav_log_file.write(
-            f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"Gate/model: {aux_model} | Action LLM: {config.LLM_PROVIDER}/{config.LLM_MODEL}\n"
-        )
-        self._planning_nav_log_file.write("=" * 70 + "\n")
         print(f"Experiment log dir: {self._experiment_log_dir}")
         print(f"Run log: {log_path}")
         print(f"Summary module log: {summary_log_path}")
@@ -193,7 +180,6 @@ class GameRunner:
         print(f"Action failure memory log: {action_failure_log_path}")
         print(f"Action generation log: {action_generation_log_path}")
         print(f"Auxiliary gate log: {auxiliary_gate_log_path}")
-        print(f"Planning/navigation log: {planning_nav_log_path}")
 
         # Initialize LPLH agent
         llm = LLMClient()
@@ -328,9 +314,6 @@ class GameRunner:
             if self._auxiliary_gate_log_file:
                 self._auxiliary_gate_log_file.close()
                 self._auxiliary_gate_log_file = None
-            if self._planning_nav_log_file:
-                self._planning_nav_log_file.close()
-                self._planning_nav_log_file = None
             elapsed = time.time() - start_time
             logs_for_save = self._logs_for_save()
 
@@ -361,7 +344,6 @@ class GameRunner:
             print(f"  Action failure log: {self._action_failure_log_path}")
             print(f"  Action generation log: {self._action_generation_log_path}")
             print(f"  Auxiliary gate log: {self._auxiliary_gate_log_path}")
-            print(f"  Planning/nav log: {self._planning_nav_log_path}")
             print(f"  Step log: {self._step_log_path}")
             print(f"  Results: {self._results_path}")
             print(f"  Total Time: {elapsed:.1f}s")
@@ -403,7 +385,6 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
-            "planning_nav_log_path": self._planning_nav_log_path,
             "step_log_path": self._step_log_path,
         }
 
@@ -790,7 +771,6 @@ class GameRunner:
         self._log_summary_module_step(epoch, step, d)
         self._log_situation_memory_step(epoch, step, d)
         self._log_auxiliary_gate_step(epoch, step, d)
-        self._log_planning_navigation_step(epoch, step, d)
         self._log_affordance_brainstorm_step(epoch, step, d)
         self._log_action_failure_memory_step(epoch, step, d)
         self._log_action_generation_step(epoch, step, d)
@@ -897,10 +877,6 @@ class GameRunner:
                 ensure_ascii=False,
             )
         )
-        self._situation_log_file.write("\n\nactive plan update:\n")
-        self._situation_log_file.write(
-            json.dumps(entry.get("active_plan_update", {}), indent=2, ensure_ascii=False)
-        )
         if entry.get("error"):
             self._situation_log_file.write("\n\nerror:\n")
             self._situation_log_file.write(str(entry.get("error")))
@@ -985,119 +961,6 @@ class GameRunner:
             self._auxiliary_gate_log_file.write(str(entry.get("error")))
         self._auxiliary_gate_log_file.write("\n" + "=" * 90 + "\n")
 
-    def _log_planning_navigation_step(self, epoch: int, step: int, detail: dict):
-        """Write active situation-plan and BFS navigation state for every step."""
-        if not self._planning_nav_log_file:
-            return
-
-        modules = detail.get("modules", {})
-        gate = modules.get("auxiliary_gate", {})
-        gate_decision = gate.get("decision", {}) if isinstance(gate, dict) else {}
-        situation_plan_update = modules.get("situation_plan", {})
-        active_plan_progress = modules.get("active_plan_progress", {})
-        situation_memory = modules.get("situation_memory", {})
-        next_generation = modules.get("next_action_generation", {}) or {}
-        executed_generation = modules.get("action_generation", {}) or {}
-        generation_for_plan = next_generation or executed_generation
-
-        metadata = {
-            "step": detail.get("step"),
-            "executed_action": detail.get("executed_action") or detail.get("prev_action"),
-            "next_command": detail.get("next_command"),
-            "score": detail.get("score"),
-            "reward_change": detail.get("reward_change"),
-            "location": (modules.get("kg_map", {}) or {}).get("current_location"),
-            "gate_status": gate.get("status") if isinstance(gate, dict) else "",
-            "gate_situation_manager_run": (
-                gate_decision.get("situation_manager", {}).get("run")
-                if isinstance(gate_decision.get("situation_manager", {}), dict)
-                else None
-            ),
-            "situation_plan_update_status": situation_plan_update.get("status"),
-            "active_plan_progress_status": active_plan_progress.get("status"),
-            "navigation_hint_status": (
-                generation_for_plan.get("active_plan_navigation_hint", {}) or {}
-            ).get("status"),
-            "navigation_hint_next_command": (
-                generation_for_plan.get("active_plan_navigation_hint", {}) or {}
-            ).get("next_command"),
-        }
-
-        self._planning_nav_log_file.write("\n" + "=" * 90 + "\n")
-        self._planning_nav_log_file.write(
-            f"[EPOCH {epoch} | STEP {step:03d}] "
-            f"plan_update: {metadata.get('situation_plan_update_status')} | "
-            f"nav_hint: {metadata.get('navigation_hint_status')}\n"
-        )
-        self._planning_nav_log_file.write("-" * 90 + "\n")
-        self._planning_nav_log_file.write("metadata:\n")
-        self._planning_nav_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
-        self._planning_nav_log_file.write("\n\nobservation:\n")
-        self._planning_nav_log_file.write(str(detail.get("observation", "")))
-        self._planning_nav_log_file.write("\n\nactive situations after step:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(
-                situation_memory.get("active_situations_after", []),
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        self._planning_nav_log_file.write("\n\nactive plan before gate:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(gate.get("active_plan_before"), indent=2, ensure_ascii=False)
-        )
-        self._planning_nav_log_file.write("\n\ngate situation_manager decision:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(
-                gate_decision.get("situation_manager", {}),
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        self._planning_nav_log_file.write("\n\nsituation manager decision:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(
-                situation_memory.get("parsed_manager_decision", {}),
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        self._planning_nav_log_file.write("\n\nsituation plan update:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(situation_plan_update, indent=2, ensure_ascii=False)
-        )
-        self._planning_nav_log_file.write("\n\nactive plan progress / clearing:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(active_plan_progress, indent=2, ensure_ascii=False)
-        )
-        self._planning_nav_log_file.write("\n\nactive plan context sent to main LLM:\n")
-        self._planning_nav_log_file.write(
-            str(generation_for_plan.get("active_plan_context", "null"))
-        )
-        self._planning_nav_log_file.write("\n\nBFS navigation hint sent to main LLM:\n")
-        self._planning_nav_log_file.write(
-            json.dumps(
-                generation_for_plan.get("active_plan_navigation_hint", {}),
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        self._planning_nav_log_file.write("\n\nKG map context sent to main LLM:\n")
-        self._planning_nav_log_file.write(str(generation_for_plan.get("kg_map_context", "")))
-        self._planning_nav_log_file.write("\n\nmain LLM parsed command:\n")
-        self._planning_nav_log_file.write(str(generation_for_plan.get("parsed_command", "")))
-        self._planning_nav_log_file.write("\n\nmain LLM extracted reasoning:\n")
-        self._planning_nav_log_file.write(
-            self._extract_action_reasoning(
-                str(generation_for_plan.get("llm_raw_response", ""))
-            ) or "(none extracted)"
-        )
-        self._planning_nav_log_file.write("\n\nmain LLM raw response:\n")
-        self._planning_nav_log_file.write(
-            str(generation_for_plan.get("llm_raw_response", ""))
-        )
-        self._planning_nav_log_file.write("\n" + "=" * 90 + "\n")
-
     def _log_affordance_brainstorm_step(self, epoch: int, step: int, detail: dict):
         """Write the affordance brainstorm prompt/response for every generated action."""
         if not self._affordance_log_file:
@@ -1113,7 +976,6 @@ class GameRunner:
             "status": entry.get("status", "missing"),
             "visible_objects": entry.get("visible_objects", []),
             "inventory": entry.get("inventory", []),
-            "active_plan": entry.get("active_plan"),
             "recent_failed_commands": entry.get("recent_failed_commands", []),
             "failed_commands": entry.get("failed_commands", []),
             "unproductive_commands": entry.get("unproductive_commands", []),
@@ -1382,7 +1244,6 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
-            "planning_nav_log_path": self._planning_nav_log_path,
             "step_log_path": self._step_log_path,
             "elapsed_seconds": elapsed,
             "timestamp": datetime.now().isoformat(),
@@ -1403,7 +1264,6 @@ class GameRunner:
         results["action_failure_log_path"] = self._action_failure_log_path
         results["action_generation_log_path"] = self._action_generation_log_path
         results["auxiliary_gate_log_path"] = self._auxiliary_gate_log_path
-        results["planning_nav_log_path"] = self._planning_nav_log_path
         results["step_log_path"] = self._step_log_path
         results["results_path"] = self._results_path
 
@@ -1433,7 +1293,6 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
-            "planning_nav_log_path": self._planning_nav_log_path,
             "results_path": self._results_path,
             "epochs": all_step_logs,
         }
