@@ -289,6 +289,7 @@ class LPLHAgent:
 
         active_plan_progress = self._update_active_plan_after_completed_action(
             completed_action=completed_action,
+            action_valid=action_valid,
             source_state_snapshot=source_state_snapshot,
             situation_resolution=situation_resolution,
         )
@@ -1405,6 +1406,7 @@ class LPLHAgent:
         return result
 
     def _update_active_plan_after_completed_action(self, completed_action: str,
+                                                   action_valid,
                                                    source_state_snapshot: dict,
                                                    situation_resolution: dict) -> dict:
         """Clear an active plan once the agent actually tries it."""
@@ -1436,6 +1438,19 @@ class LPLHAgent:
         )
         target = self._resolve_known_location(plan.get("target_location", ""))
         normalized_action = self._clean_text(completed_action).lower()
+
+        if action_valid is not False:
+            prep_update = self.active_plan_memory.mark_preparation_done(
+                normalized_action,
+                step=self.step_count,
+            )
+            if prep_update.get("status") == "updated_preparation_completed":
+                result.update(prep_update)
+                result["status"] = "updated_preparation_completed"
+                result["reason"] = "Completed one suggested preparation command."
+                result["active_plan_after"] = self.active_plan_memory.active_plan()
+                return result
+
         target_commands = set(plan.get("commands_to_try_at_target", []) or [])
         utility_commands = {"look", "inventory", "i"}
         at_target_when_chosen = bool(target and source_location == target)

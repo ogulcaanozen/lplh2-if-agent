@@ -65,6 +65,33 @@ class ActivePlanMemory:
             "active_plan": None,
         }
 
+    def mark_preparation_done(self, command: str, step: int = 0) -> dict:
+        """Remove an exact completed preparation command from the active plan."""
+        before = self.active_plan()
+        result = {
+            "status": "no_active_plan",
+            "completed_command": self._clean(command).lower(),
+            "removed_preparation": "",
+            "active_plan_before": before,
+            "active_plan_after": before,
+            "step": int(step or 0),
+        }
+        if not self._plan:
+            return result
+
+        normalized_command = self._clean(command).lower()
+        preparations = list(self._plan.get("suggested_preparation", []) or [])
+        remaining = [cmd for cmd in preparations if cmd != normalized_command]
+        if len(remaining) == len(preparations):
+            result["status"] = "not_a_preparation_command"
+            return result
+
+        self._plan["suggested_preparation"] = remaining
+        result["status"] = "updated_preparation_completed"
+        result["removed_preparation"] = normalized_command
+        result["active_plan_after"] = self.active_plan()
+        return result
+
     def format_for_prompt(self, navigation_hint: dict | None = None) -> str:
         if not self._plan:
             return "null"
