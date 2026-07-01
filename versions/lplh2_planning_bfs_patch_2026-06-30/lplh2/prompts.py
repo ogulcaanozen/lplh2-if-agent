@@ -533,9 +533,9 @@ Make exactly these decisions:
    actively considering now. This is not a command choice and it is not forced.
    It only creates an advisory plan for the main action LLM.
    Current Inventory is authoritative. Do not claim the agent is carrying,
-   holding, or has an item unless it appears in Current Inventory or the KG map
-   inventory. A visible object, an opened object, or an object whose state
-   changed is not carried merely because it is present or usable in the room.
+   holding, or has an item unless it appears in Current Inventory. A visible
+   object, an opened object, or an object whose state changed is not carried
+   merely because it is present or usable in the room.
    - Set "create": true when Current Inventory, a newly found item/object,
      learned information, changed world state, or current position gives a
      concrete reason to return to or address one Active Stored Situation.
@@ -620,7 +620,6 @@ Reward Change: {reward_change}
 Rooms Visited Before This Step: {rooms_visited_before}
 Inventory Before This Step: {inventory_before}
 Current Inventory: {inventory}
-Current KG Map / World State: {kg_map}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
 Active Plan Already Stored: {active_plan}
