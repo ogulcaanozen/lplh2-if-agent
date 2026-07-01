@@ -114,8 +114,7 @@ class SituationMemory:
     def add(self, situation: dict[str, str]) -> tuple[bool, dict[str, str]]:
         """Add a situation if not already present."""
         normalized = self._normalize_record(situation)
-        if not normalized["id"]:
-            normalized["id"] = self._allocate_id()
+        normalized["id"] = self._allocate_id()
         key = self._key(normalized)
         if not normalized["situation"] or key in self._keys:
             return False, normalized

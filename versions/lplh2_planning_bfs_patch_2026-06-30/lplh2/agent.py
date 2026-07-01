@@ -1898,6 +1898,16 @@ class LPLHAgent:
             else {}
         )
         visible_objects = self._visible_objects_for_location(location)
+        same_state_snapshot = self._repetition_state_snapshot(
+            location=location,
+            observation=observation,
+            visible_objects=visible_objects,
+            inventory=list(self.kg_map.inventory),
+            score=score,
+        )
+        same_state_tried_commands = self.state_action_memory.commands_for_state(
+            same_state_snapshot
+        )
         result = {
             "status": "not_run",
             "location": location,
@@ -1910,6 +1920,7 @@ class LPLHAgent:
             "gate_decision": dict(gate_decision or {}),
             "stored_situation_detection_gate": dict(legacy_detection_decision or {}),
             "gate_reason": (gate_decision or {}).get("reason", ""),
+            "same_state_tried_commands": same_state_tried_commands,
             "prompt": "",
             "llm_raw_response": "",
             "finish_reason": "",
@@ -1960,7 +1971,7 @@ class LPLHAgent:
                 recent_failed_commands=list(self.recent_failed_actions),
                 known_failed_commands_here=self.failed_action_memory.format_for_prompt(location),
                 recent_command_outcomes=self._recent_same_location_outcomes(location),
-                same_state_tried_commands=[],
+                same_state_tried_commands=same_state_tried_commands,
             )
             result["prompt"] = self.llm.last_situation_manager_prompt or ""
             result["llm_raw_response"] = self.llm.last_situation_manager_raw_response or ""
@@ -2005,7 +2016,14 @@ class LPLHAgent:
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", body, re.DOTALL)
         if m:
             body = m.group(1).strip()
-        if re.sub(r"[\s.]+", "", body.lower()) in {"none", "null", "no", "noop"}:
+        if re.sub(r"[\s.]+", "", body.lower()) in {
+            "none",
+            "null",
+            "no",
+            "noop",
+            "nosituation",
+            "nonefound",
+        }:
             return {"stored_situations": {"add": [], "update": [], "remove": []}}, ""
         try:
             parsed = json.loads(body)
@@ -2095,6 +2113,7 @@ class LPLHAgent:
             "added_situations": [],
             "updated_situations": [],
             "removed_situations": [],
+            "skipped_updates": [],
             "active_situations_before": active_before,
             "active_situations_after": active_before,
         }
@@ -2106,6 +2125,18 @@ class LPLHAgent:
 
         for update in stored.get("update", []) or []:
             cleaned = self._normalize_manager_situation(update)
+            if not cleaned.get("id"):
+                fallback = self._resolve_update_target_without_id(cleaned, active_before)
+                if fallback:
+                    cleaned["id"] = fallback["id"]
+                else:
+                    skipped = dict(cleaned)
+                    skipped["reason"] = (
+                        "missing id and no unambiguous active situation matched "
+                        "by location/situation"
+                    )
+                    result["skipped_updates"].append(skipped)
+                    continue
             changed, normalized = self.situation_memory.update(cleaned, cleaned)
             if changed:
                 result["updated_situations"].append(normalized)
@@ -2118,6 +2149,29 @@ class LPLHAgent:
 
         result["active_situations_after"] = self.situation_memory.active_situations()
         return result
+
+    def _resolve_update_target_without_id(self, update: dict,
+                                          active_before: list[dict]) -> dict:
+        """Best-effort target for legacy/malformed situation updates without id.
+
+        Prefer exact content matching. If wording changed but exactly one active
+        situation exists at the same location, use that single location match.
+        Ambiguous multi-match cases stay skipped and visible in logs.
+        """
+        if not isinstance(update, dict):
+            return {}
+        exact = self.situation_memory.get(update)
+        if exact:
+            return exact
+
+        update_location = self._normalize_event_piece(update.get("location", ""))
+        if not update_location:
+            return {}
+        same_location = [
+            item for item in (active_before or [])
+            if self._normalize_event_piece(item.get("location", "")) == update_location
+        ]
+        return dict(same_location[0]) if len(same_location) == 1 else {}
 
     def _detect_and_store_situation(self, action: str, observation: str,
                                     just_resolved: list = None) -> dict:

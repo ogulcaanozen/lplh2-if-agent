@@ -879,6 +879,14 @@ class GameRunner:
         self._situation_log_file.write(
             json.dumps(entry.get("updated_situations", []), indent=2, ensure_ascii=False)
         )
+        self._situation_log_file.write("\n\nskipped situation updates:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("skipped_updates", []), indent=2, ensure_ascii=False)
+        )
+        self._situation_log_file.write("\n\nsame-state tried commands supplied to manager:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("same_state_tried_commands", []), indent=2, ensure_ascii=False)
+        )
         self._situation_log_file.write("\n\nnew stored situation:\n")
         self._situation_log_file.write(
             json.dumps(entry.get("new_stored_situation"), indent=2, ensure_ascii=False)
@@ -1070,6 +1078,10 @@ class GameRunner:
         self._affordance_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
         self._affordance_log_file.write("\n\ncurrent observation:\n")
         self._affordance_log_file.write(str(entry.get("observation") or detail.get("observation", "")))
+        self._affordance_log_file.write("\n\nactive stored situations supplied to brainstorm:\n")
+        self._affordance_log_file.write(
+            json.dumps(entry.get("active_situations", []), indent=2, ensure_ascii=False)
+        )
         self._affordance_log_file.write("\n\nbrainstormed commands:\n")
         if ideas:
             for idx, idea in enumerate(ideas, 1):
