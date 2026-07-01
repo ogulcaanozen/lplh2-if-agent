@@ -258,51 +258,20 @@ class LPLHAgent:
             environmental_change_detection["source"] = "legacy_fallback_after_gate_failure"
         detail["modules"]["environmental_change_detection"] = environmental_change_detection
 
-        situation_resolution = self._resolve_stored_situations(
+        situation_detail = self._run_situation_manager(
+            auxiliary_gate=auxiliary_gate,
             action=completed_action,
             observation=observation,
             score=score,
             reward_change=reward_change,
             action_valid=action_valid,
             prev_location=prev_location,
-            environmental_change=environmental_change_detection,
+            inventory_before=inventory_before,
         )
-        if (auxiliary_gate.get("decision", {})
-                .get("stored_situation_detection", {})
-                .get("run", True)):
-            situation_detail = self._detect_and_store_situation(
-                action=completed_action,
-                observation=observation,
-                just_resolved=situation_resolution.get("removed_situations", []),
-            )
-        else:
-            situation_detail = self._skipped_situation_detection_result(
-                action=completed_action,
-                just_resolved=situation_resolution.get("removed_situations", []),
-                gate_decision=auxiliary_gate.get("decision", {}).get(
-                    "stored_situation_detection", {}
-                ),
-            )
-        situation_detail["resolution"] = situation_resolution
-        situation_detail["active_situations_after"] = self.situation_memory.active_situations()
         detail["modules"]["situation_memory"] = situation_detail
-
-        active_plan_progress = self._update_active_plan_after_completed_action(
-            completed_action=completed_action,
-            action_valid=action_valid,
-            source_state_snapshot=source_state_snapshot,
-            situation_resolution=situation_resolution,
-        )
-        detail["modules"]["active_plan_progress"] = active_plan_progress
-        situation_plan_update = self._apply_gate_situation_plan(
-            auxiliary_gate=auxiliary_gate,
-            active_situations_after=situation_detail["active_situations_after"],
-            skipped=active_plan_progress.get("status") in {
-                "cleared_attempted",
-                "cleared_resolved_situation",
-            },
-        )
-        detail["modules"]["situation_plan"] = situation_plan_update
+        detail["modules"]["situation_manager"] = situation_detail
+        detail["modules"]["situation_plan"] = situation_detail.get("active_plan_update", {})
+        detail["modules"]["active_plan_progress"] = situation_detail.get("active_plan_update", {})
 
         experience_summary = None
         summary_log_entries = []
@@ -1535,10 +1504,17 @@ class LPLHAgent:
             env_summary["run"] = False
 
         situation_raw = parsed.get(
-            "stored_situation_detection",
-            parsed.get("situation_detection", {}),
+            "situation_manager",
+            parsed.get(
+                "stored_situation_detection",
+                parsed.get("situation_detection", {}),
+            ),
         )
         affordance_raw = parsed.get("affordance_brainstorming", {})
+        situation_manager = self._normalize_gate_run_decision(
+            situation_raw,
+            default_run=True,
+        )
         return {
             "command_outcome": command_outcome,
             "environmental_change": {
@@ -1550,10 +1526,8 @@ class LPLHAgent:
                 "environmental": env_summary,
                 "narrative": narrative_summary,
             },
-            "stored_situation_detection": self._normalize_gate_run_decision(
-                situation_raw,
-                default_run=True,
-            ),
+            "situation_manager": situation_manager,
+            "stored_situation_detection": situation_manager,
             "affordance_brainstorming": self._normalize_gate_run_decision(
                 affordance_raw,
                 default_run=True,
@@ -1561,9 +1535,7 @@ class LPLHAgent:
             "inventory_update": self._normalize_gate_inventory_update(
                 parsed.get("inventory_update", {}),
             ),
-            "situation_plan": self._normalize_gate_situation_plan(
-                parsed.get("situation_plan", {}),
-            ),
+            "situation_plan": self._normalize_gate_situation_plan({}),
         }
 
     def _normalize_command_outcome(self, value, action_valid) -> dict:
@@ -1724,9 +1696,14 @@ class LPLHAgent:
                     "evidence": "",
                 },
             },
+            "situation_manager": {
+                "run": True,
+                "reason": "Gate unavailable; preserve previous situation-manager behavior.",
+                "focus": [],
+            },
             "stored_situation_detection": {
                 "run": True,
-                "reason": "Gate unavailable; preserve previous situation detection behavior.",
+                "reason": "Gate unavailable; preserve previous situation-manager behavior.",
                 "focus": [],
             },
             "affordance_brainstorming": {
@@ -2113,6 +2090,329 @@ class LPLHAgent:
             }))
 
         return triggers
+
+    def _run_situation_manager(self, auxiliary_gate: dict, action: str,
+                               observation: str, score: int, reward_change: int,
+                               action_valid, prev_location: str,
+                               inventory_before: set = None) -> dict:
+        """Use one LLM call to manage stored situations and the active plan."""
+        location = self.kg_map.current_location or "unknown"
+        active_before = self.situation_memory.active_situations()
+        active_plan_before = self.active_plan_memory.active_plan()
+        gate_decision = (
+            auxiliary_gate.get("decision", {}).get("situation_manager", {})
+            if isinstance(auxiliary_gate, dict)
+            else {}
+        )
+        visible_objects = self._visible_objects_for_location(location)
+        result = {
+            "status": "not_run",
+            "location": location,
+            "action": action,
+            "inventory": list(self.kg_map.inventory),
+            "inventory_before": sorted(str(item) for item in (inventory_before or [])),
+            "visible_objects": visible_objects,
+            "active_situations_before": active_before,
+            "active_situations_after": active_before,
+            "active_plan_before": active_plan_before,
+            "active_plan_after": active_plan_before,
+            "gate_decision": dict(gate_decision or {}),
+            "gate_reason": (gate_decision or {}).get("reason", ""),
+            "prompt": "",
+            "llm_raw_response": "",
+            "finish_reason": "",
+            "response_body": "",
+            "parsed_manager_decision": {},
+            "added_situations": [],
+            "updated_situations": [],
+            "removed_situations": [],
+            "parsed_situation": None,
+            "new_stored_situation": None,
+            "resolution": {},
+            "active_plan_update": {
+                "status": "not_run",
+                "active_plan_before": active_plan_before,
+                "active_plan_after": active_plan_before,
+                "reason": "",
+            },
+            "error": "",
+        }
+
+        if not (gate_decision or {}).get("run", True):
+            result["status"] = "skipped_by_auxiliary_gate"
+            result["active_plan_update"] = {
+                "status": "skipped_by_auxiliary_gate",
+                "active_plan_before": active_plan_before,
+                "active_plan_after": active_plan_before,
+                "reason": result["gate_reason"],
+            }
+            result["resolution"] = {
+                "status": "skipped_by_auxiliary_gate",
+                "parsed_resolved_situations": [],
+                "removed_situations": [],
+            }
+            return result
+
+        try:
+            response_body = self.llm.manage_situations(
+                location=location,
+                previous_location=prev_location or "unknown",
+                action=action,
+                action_valid=action_valid,
+                command_outcome=(
+                    auxiliary_gate.get("decision", {}).get("command_outcome", {})
+                    if isinstance(auxiliary_gate, dict)
+                    else {}
+                ),
+                observation=observation,
+                score=score,
+                reward_change=reward_change,
+                inventory_before=sorted(str(item) for item in (inventory_before or [])),
+                inventory=list(self.kg_map.inventory),
+                visible_objects=visible_objects,
+                active_situations=active_before,
+                active_plan=active_plan_before,
+                recent_failed_commands=list(self.recent_failed_actions),
+                known_failed_commands_here=self.failed_action_memory.format_for_prompt(location),
+                recent_command_outcomes=self._recent_same_location_outcomes(location),
+                same_state_tried_commands=[],
+            )
+            result["prompt"] = self.llm.last_situation_manager_prompt or ""
+            result["llm_raw_response"] = self.llm.last_situation_manager_raw_response or ""
+            result["finish_reason"] = self.llm.last_situation_manager_finish_reason or ""
+            result["response_body"] = response_body
+
+            parsed, parse_error = self._parse_situation_manager_response(response_body)
+            if parse_error:
+                result["status"] = "parse_error"
+                result["error"] = parse_error
+            else:
+                decision = self._normalize_situation_manager_decision(parsed)
+                result["parsed_manager_decision"] = decision
+                apply_result = self._apply_situation_manager_decision(decision)
+                result.update(apply_result)
+                result["status"] = apply_result.get("status", "applied")
+        except Exception as e:
+            logger.warning(f"Situation manager failed: {e}")
+            result["status"] = "error"
+            result["error"] = str(e)
+            result["prompt"] = self.llm.last_situation_manager_prompt or ""
+            result["llm_raw_response"] = self.llm.last_situation_manager_raw_response or ""
+            result["finish_reason"] = self.llm.last_situation_manager_finish_reason or ""
+
+        result["active_situations_after"] = self.situation_memory.active_situations()
+        result["active_plan_after"] = self.active_plan_memory.active_plan()
+        if result.get("added_situations"):
+            result["parsed_situation"] = result["added_situations"][0]
+            result["new_stored_situation"] = result["added_situations"][0]
+        result["resolution"] = {
+            "status": "removed" if result.get("removed_situations") else "none",
+            "prompt": result.get("prompt", ""),
+            "llm_raw_response": result.get("llm_raw_response", ""),
+            "parsed_resolved_situations": result.get("removed_situations", []),
+            "removed_situations": result.get("removed_situations", []),
+        }
+        return result
+
+    def _parse_situation_manager_response(self, response_body: str) -> tuple[dict, str]:
+        body = str(response_body or "").strip()
+        if not body:
+            return {}, "empty response"
+        m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", body, re.DOTALL)
+        if m:
+            body = m.group(1).strip()
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            start = body.find("{")
+            end = body.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    parsed = json.loads(body[start:end + 1])
+                except json.JSONDecodeError:
+                    return {}, "response was not valid JSON"
+            else:
+                return {}, "response was not valid JSON"
+        if not isinstance(parsed, dict):
+            return {}, "response did not contain an object"
+        return parsed, ""
+
+    def _normalize_situation_manager_decision(self, parsed: dict) -> dict:
+        if not isinstance(parsed, dict):
+            parsed = {}
+        stored = parsed.get("stored_situations", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        return {
+            "stored_situations": {
+                "add": self._normalize_manager_situation_list(stored.get("add", [])),
+                "update": self._normalize_manager_update_list(stored.get("update", [])),
+                "remove": self._normalize_manager_situation_list(stored.get("remove", [])),
+            },
+            "active_plan": self._normalize_manager_active_plan(
+                parsed.get("active_plan", {})
+            ),
+        }
+
+    def _normalize_manager_situation_list(self, value) -> list[dict]:
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        result = []
+        for item in value:
+            situation = self._normalize_manager_situation(item)
+            if situation.get("location") and situation.get("situation"):
+                if isinstance(item, dict) and "reason" in item:
+                    situation["reason"] = self._clean_text(item.get("reason", ""))
+                result.append(situation)
+        return result[:8]
+
+    def _normalize_manager_update_list(self, value) -> list[dict]:
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        result = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            old = self._normalize_manager_situation(item.get("from", {}))
+            new = self._normalize_manager_situation(item.get("to", {}))
+            if (old.get("location") and old.get("situation")
+                    and new.get("location") and new.get("situation")):
+                result.append({"from": old, "to": new})
+        return result[:8]
+
+    def _normalize_manager_situation(self, item) -> dict:
+        if not isinstance(item, dict):
+            return {"location": "", "situation": ""}
+        return {
+            "location": self._clean_text(item.get("location", "")),
+            "situation": self._clean_text(item.get("situation", "")),
+        }
+
+    def _normalize_manager_active_plan(self, value) -> dict:
+        if not isinstance(value, dict):
+            value = {}
+        action = self._clean_text(value.get("action", "none")).lower()
+        aliases = {
+            "": "none",
+            "no": "none",
+            "noop": "none",
+            "no_change": "keep",
+            "unchanged": "keep",
+            "delete": "clear",
+            "remove": "clear",
+        }
+        action = aliases.get(action, action)
+        if action not in {"create", "update", "keep", "clear", "none"}:
+            action = "none"
+        related = self._normalize_manager_situation(value.get("related_situation", {}))
+        return {
+            "action": action,
+            "target_location": self._clean_text(value.get("target_location", "")),
+            "related_situation": related,
+            "reason": self._clean_text(value.get("reason", "")),
+            "suggested_preparation": self._clean_gate_command_list(
+                value.get("suggested_preparation", [])
+            ),
+            "commands_to_try_at_target": self._clean_gate_command_list(
+                value.get("commands_to_try_at_target", [])
+            ),
+        }
+
+    def _apply_situation_manager_decision(self, decision: dict) -> dict:
+        stored = decision.get("stored_situations", {}) if isinstance(decision, dict) else {}
+        active_before = self.situation_memory.active_situations()
+        plan_before = self.active_plan_memory.active_plan()
+        result = {
+            "status": "applied",
+            "added_situations": [],
+            "updated_situations": [],
+            "removed_situations": [],
+            "active_situations_before": active_before,
+            "active_situations_after": active_before,
+            "active_plan_before": plan_before,
+            "active_plan_after": plan_before,
+            "active_plan_update": {
+                "status": "not_run",
+                "active_plan_before": plan_before,
+                "active_plan_after": plan_before,
+                "reason": "",
+            },
+        }
+
+        for situation in stored.get("remove", []) or []:
+            cleaned = self._normalize_manager_situation(situation)
+            if self.situation_memory.remove(cleaned):
+                result["removed_situations"].append(cleaned)
+
+        for update in stored.get("update", []) or []:
+            old = self._normalize_manager_situation(update.get("from", {}))
+            new = self._normalize_manager_situation(update.get("to", {}))
+            changed, normalized = self.situation_memory.update(old, new)
+            if changed:
+                result["updated_situations"].append({"from": old, "to": normalized})
+
+        for situation in stored.get("add", []) or []:
+            cleaned = self._normalize_manager_situation(situation)
+            added, normalized = self.situation_memory.add(cleaned)
+            if added:
+                result["added_situations"].append(normalized)
+
+        plan_decision = decision.get("active_plan", {}) if isinstance(decision, dict) else {}
+        plan_update = self._apply_situation_manager_plan(plan_decision)
+        result["active_plan_update"] = plan_update
+        result["active_situations_after"] = self.situation_memory.active_situations()
+        result["active_plan_after"] = self.active_plan_memory.active_plan()
+        return result
+
+    def _apply_situation_manager_plan(self, plan_decision: dict) -> dict:
+        before = self.active_plan_memory.active_plan()
+        action = (plan_decision or {}).get("action", "none")
+        result = {
+            "status": "no_plan_change",
+            "action": action,
+            "raw_plan": plan_decision,
+            "active_plan_before": before,
+            "active_plan_after": before,
+            "reason": (plan_decision or {}).get("reason", ""),
+        }
+
+        if action == "clear":
+            cleared = self.active_plan_memory.clear(
+                reason=plan_decision.get("reason", ""),
+                step=self.step_count,
+            )
+            result.update(cleared)
+            result["status"] = "cleared"
+        elif action in {"create", "update"}:
+            plan_payload = {
+                "target_location": plan_decision.get("target_location", ""),
+                "related_situation": plan_decision.get("related_situation", {}),
+                "reason": plan_decision.get("reason", ""),
+                "suggested_preparation": plan_decision.get("suggested_preparation", []),
+                "commands_to_try_at_target": plan_decision.get("commands_to_try_at_target", []),
+            }
+            applied = self.active_plan_memory.set_plan(
+                plan_payload,
+                step=self.step_count,
+                source="situation_manager",
+            )
+            result.update(applied)
+            result["status"] = (
+                "updated"
+                if action == "update" and applied.get("status") == "created"
+                else applied.get("status", action)
+            )
+        elif action == "keep":
+            result["status"] = "kept_active" if before else "no_active_plan"
+        else:
+            result["status"] = "none"
+
+        result["active_plan_after"] = self.active_plan_memory.active_plan()
+        return result
 
     def _detect_and_store_situation(self, action: str, observation: str,
                                     just_resolved: list = None) -> dict:

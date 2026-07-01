@@ -122,6 +122,18 @@ class SituationMemory:
         self._keys.remove(key)
         return True
 
+    def update(self, old: dict[str, str], new: dict[str, str]) -> tuple[bool, dict[str, str]]:
+        """Rewrite an existing situation without creating a duplicate on mismatch."""
+        normalized = {
+            "location": self._clean_field(new.get("location")) or "unknown",
+            "situation": self._clean_field(new.get("situation")) or "",
+        }
+        if not normalized["situation"] or self._key(old) not in self._keys:
+            return False, normalized
+        removed = self.remove(old)
+        added, normalized = self.add(normalized)
+        return bool(removed or added), normalized
+
     def key_for(self, situation: dict[str, str]) -> str:
         """Return the normalized internal key for equality checks."""
         return self._key(situation)

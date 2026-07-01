@@ -858,6 +858,18 @@ class GameRunner:
         self._situation_log_file.write(
             json.dumps(entry.get("parsed_situation"), indent=2, ensure_ascii=False)
         )
+        self._situation_log_file.write("\n\nparsed manager decision:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("parsed_manager_decision", {}), indent=2, ensure_ascii=False)
+        )
+        self._situation_log_file.write("\n\nadded situations:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("added_situations", []), indent=2, ensure_ascii=False)
+        )
+        self._situation_log_file.write("\n\nupdated situations:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("updated_situations", []), indent=2, ensure_ascii=False)
+        )
         self._situation_log_file.write("\n\nnew stored situation:\n")
         self._situation_log_file.write(
             json.dumps(entry.get("new_stored_situation"), indent=2, ensure_ascii=False)
@@ -884,6 +896,10 @@ class GameRunner:
                 indent=2,
                 ensure_ascii=False,
             )
+        )
+        self._situation_log_file.write("\n\nactive plan update:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("active_plan_update", {}), indent=2, ensure_ascii=False)
         )
         if entry.get("error"):
             self._situation_log_file.write("\n\nerror:\n")
@@ -992,9 +1008,9 @@ class GameRunner:
             "reward_change": detail.get("reward_change"),
             "location": (modules.get("kg_map", {}) or {}).get("current_location"),
             "gate_status": gate.get("status") if isinstance(gate, dict) else "",
-            "gate_situation_plan_create": (
-                gate_decision.get("situation_plan", {}).get("create")
-                if isinstance(gate_decision.get("situation_plan", {}), dict)
+            "gate_situation_manager_run": (
+                gate_decision.get("situation_manager", {}).get("run")
+                if isinstance(gate_decision.get("situation_manager", {}), dict)
                 else None
             ),
             "situation_plan_update_status": situation_plan_update.get("status"),
@@ -1030,10 +1046,18 @@ class GameRunner:
         self._planning_nav_log_file.write(
             json.dumps(gate.get("active_plan_before"), indent=2, ensure_ascii=False)
         )
-        self._planning_nav_log_file.write("\n\ngate situation_plan decision:\n")
+        self._planning_nav_log_file.write("\n\ngate situation_manager decision:\n")
         self._planning_nav_log_file.write(
             json.dumps(
-                gate_decision.get("situation_plan", {}),
+                gate_decision.get("situation_manager", {}),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        self._planning_nav_log_file.write("\n\nsituation manager decision:\n")
+        self._planning_nav_log_file.write(
+            json.dumps(
+                situation_memory.get("parsed_manager_decision", {}),
                 indent=2,
                 ensure_ascii=False,
             )

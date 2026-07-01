@@ -23,6 +23,7 @@ from .prompts import (
     ENVIRONMENTAL_CHANGE_PROMPT,
     ENVIRONMENTAL_CHANGE_DETECTION_PROMPT,
     AUXILIARY_MODULE_GATE_PROMPT,
+    SITUATION_MANAGER_PROMPT,
     ERROR_CORRECTION_PROMPT,
     STORED_SITUATION_DETECTION_PROMPT,
     STORED_SITUATION_RESOLUTION_PROMPT,
@@ -110,6 +111,9 @@ class LLMClient:
         self.last_situation_resolution_prompt = None
         self.last_situation_resolution_raw_response = None
         self.last_situation_resolution_finish_reason = None
+        self.last_situation_manager_prompt = None
+        self.last_situation_manager_raw_response = None
+        self.last_situation_manager_finish_reason = None
         self.last_environmental_change_prompt = None
         self.last_environmental_change_raw_response = None
         self.last_environmental_change_finish_reason = None
@@ -426,6 +430,59 @@ class LLMClient:
             self.last_situation_resolution_finish_reason = "llm_a_qwen14b"
 
         self.last_situation_resolution_raw_response = response
+        m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
+        return m.group(1).strip() if m else response.strip()
+
+    def manage_situations(self, location: str, previous_location: str,
+                          action: str, action_valid, command_outcome: dict,
+                          observation: str, score: int, reward_change: int,
+                          inventory_before: list, inventory: list,
+                          visible_objects: list, active_situations: list,
+                          active_plan: dict | None,
+                          recent_failed_commands: list,
+                          known_failed_commands_here: str,
+                          recent_command_outcomes: list,
+                          same_state_tried_commands: list) -> str:
+        """Manage stored situations and one advisory active plan in one call."""
+        prompt = SITUATION_MANAGER_PROMPT.format(
+            location=location or "unknown",
+            previous_location=previous_location or "unknown",
+            action=action or "none",
+            action_valid=str(action_valid),
+            command_outcome=json.dumps(command_outcome or {}, ensure_ascii=False),
+            observation=observation or "",
+            score=score,
+            reward_change=reward_change,
+            inventory_before=json.dumps(inventory_before or [], ensure_ascii=False),
+            inventory=json.dumps(inventory or [], ensure_ascii=False),
+            visible_objects=json.dumps(visible_objects or [], ensure_ascii=False),
+            active_situations=json.dumps(active_situations or [], ensure_ascii=False),
+            active_plan=json.dumps(active_plan or None, ensure_ascii=False),
+            recent_failed_commands=json.dumps(recent_failed_commands or [], ensure_ascii=False),
+            known_failed_commands_here=known_failed_commands_here or "[]",
+            recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
+            same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
+        )
+
+        self.last_situation_manager_prompt = prompt
+        self.last_situation_manager_raw_response = None
+        self.last_situation_manager_finish_reason = None
+        if self._es_client and config.LLM_ES_MODEL:
+            response, finish_reason = self._chat_es_json(
+                prompt,
+                max_completion_tokens=2048,
+                retry_instruction=(
+                    "The previous response was empty or truncated. Return only the "
+                    "required |start|...|end| JSON object. Do not explain."
+                ),
+                retry_tokens=2048,
+            )
+            self.last_situation_manager_finish_reason = finish_reason
+        else:
+            response = self._chat_aux_fallback(prompt, max_new_tokens=2048)
+            self.last_situation_manager_finish_reason = "llm_a_qwen14b"
+
+        self.last_situation_manager_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
         return m.group(1).strip() if m else response.strip()
 
