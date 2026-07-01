@@ -477,6 +477,7 @@ class LLMClient:
                                known_failed_commands_here: str,
                                recent_command_outcomes: list,
                                same_state_tried_commands: list,
+                               kg_map: str,
                                cached_affordance_ideas_available: int) -> str:
         """Route selected auxiliary modules for the latest completed step."""
         prompt = AUXILIARY_MODULE_GATE_PROMPT.format(
@@ -497,6 +498,7 @@ class LLMClient:
             known_failed_commands_here=known_failed_commands_here or "[]",
             recent_command_outcomes=json.dumps(recent_command_outcomes or [], ensure_ascii=False),
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
+            kg_map=kg_map or "",
             cached_affordance_ideas_available=int(cached_affordance_ideas_available or 0),
         )
 

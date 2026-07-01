@@ -154,8 +154,10 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Room & Map Details**: Assess where you are, noting any exits, known layout, and significant objects.
 - **Recent Attempts**: Reflect on the previous actions, the motivation of taking that action and observation after this attempt.
 - **Inventory Check**: Identify items on hand (keys, tools, etc.) that might solve current puzzles or overcome obstacles.
+- **Inventory Is Authoritative**: Treat only items listed in the current inventory/map inventory as carried. A visible object, an opened object, or an object whose state changed is not in your possession unless it appears in inventory.
+- **Visible Tools Must Be Taken First**: If a visible object could solve a stored situation but is not in inventory, consider taking it before using it or leaving the room. For example, if a light source is visible but not carried, preparation should include taking it before relying on it in a dark area.
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
-- **Active Situation Plan**: If a plan is present, treat it as advisory. It marks a stored situation that may now be worth pursuing. You are not forced to follow it, but if it fits the current observation, inventory, and map, consider it seriously.
+- **Active Situation Plan**: If a plan is present, treat it as advisory. It marks a stored situation that may now be worth pursuing. You are not forced to follow it, but if it fits the current observation, inventory, and map, consider it seriously. Before following it, verify that any required item is actually in inventory; if it is only visible nearby, take it first.
 - **BFS Navigation Hint**: If you decide to pursue the active plan and it includes a "route_found" navigation hint, use the hint's "next_command" as the immediate navigation command. Do not output a multi-step route as one command.
 - **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
 - **Condition-Level Agenda**: Some affordance agenda entries may have "kind": "condition"; these target a room/environment/perception/parser condition rather than one visible object. Consider them when recent observations suggest normal commands are being distorted, obscured, blocked, or mismatched.
@@ -189,6 +191,7 @@ Your internal reasoning steps Here.
 2. **Conflict Resolution**
 - Treat prior attempts known to fail at this location or context as cautionary evidence.
 - Avoid exact commands from the Known Failed Commands Here list unless the current state has meaningfully changed and you can justify retrying.
+- Do not say or assume "I have/carry/possess X" unless X appears in inventory. If X is in visible objects or known object locations instead, treat it as available to pick up, not already carried.
 - Validate uncertain ('may_') directions or items before fully committing to them.
 - After verify all the exits in one room then you can fully trust the map.
 3. **Fallback Strategies**
@@ -529,6 +532,10 @@ Make exactly these decisions:
    Decide whether the latest step makes an already stored situation worth
    actively considering now. This is not a command choice and it is not forced.
    It only creates an advisory plan for the main action LLM.
+   Current Inventory is authoritative. Do not claim the agent is carrying,
+   holding, or has an item unless it appears in Current Inventory or the KG map
+   inventory. A visible object, an opened object, or an object whose state
+   changed is not carried merely because it is present or usable in the room.
    - Set "create": true when Current Inventory, a newly found item/object,
      learned information, changed world state, or current position gives a
      concrete reason to return to or address one Active Stored Situation.
@@ -536,6 +543,10 @@ Make exactly these decisions:
      area; now carrying a key/tool for a remembered locked/nailed/blocked
      access; now having a weapon/protection for a remembered danger; now having
      opened a route that reaches the situation location.
+   - If the useful object is visible or known in the current room but not in
+     Current Inventory, suggested_preparation should include taking it before
+     using it or traveling to the situation. Do not describe that as "now
+     carrying" the object.
    - Set false when there are no Active Stored Situations, when the new item is
      generic with no clear relation, or when Active Plan Already Stored already
      targets the same situation.
@@ -609,6 +620,7 @@ Reward Change: {reward_change}
 Rooms Visited Before This Step: {rooms_visited_before}
 Inventory Before This Step: {inventory_before}
 Current Inventory: {inventory}
+Current KG Map / World State: {kg_map}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
 Active Plan Already Stored: {active_plan}

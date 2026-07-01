@@ -1288,6 +1288,7 @@ class LPLHAgent:
                 known_failed_commands_here=known_failed_here,
                 recent_command_outcomes=recent_command_outcomes,
                 same_state_tried_commands=same_state_tried_commands,
+                kg_map=self.kg_map.to_prompt_string(),
                 cached_affordance_ideas_available=len(cached_affordance_ideas),
             )
             result["prompt"] = self.llm.last_auxiliary_gate_prompt or ""
