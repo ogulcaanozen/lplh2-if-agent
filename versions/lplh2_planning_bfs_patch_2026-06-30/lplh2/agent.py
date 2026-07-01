@@ -16,6 +16,7 @@ import re
 import logging
 import hashlib
 import json
+import time
 from .kg_map import KGMap
 from .action_space import ActionSpace
 from .experience_lib import ExperienceLib
@@ -136,6 +137,12 @@ class LPLHAgent:
             return command
 
         self.step_count += 1
+        step_started = time.perf_counter()
+        module_timings: dict[str, float] = {}
+
+        def record_timing(name: str, started_at: float):
+            module_timings[name] = round(time.perf_counter() - started_at, 4)
+
         reward_change = score - self.prev_score
         completed_action = self.prev_action
         source_generation = self.pending_generation or {}
@@ -163,6 +170,7 @@ class LPLHAgent:
 
         action_valid = None
         action_split = None
+        timer = time.perf_counter()
         try:
             is_valid = self.fm.validate_action(completed_action, observation)
             action_valid = is_valid
@@ -177,6 +185,7 @@ class LPLHAgent:
         except Exception as e:
             logger.warning(f"Action validation/splitting failed: {e}")
             action_valid = f"ERROR: {e}"
+        record_timing("fm_action_validation_and_split", timer)
 
         detail["modules"]["action_space"] = {
             "prev_action_valid": action_valid,
@@ -188,6 +197,7 @@ class LPLHAgent:
 
         extracted_triples = []
         applied_triples = []
+        timer = time.perf_counter()
         try:
             extracted_triples = self.fm.extract_relations(completed_action, observation)
             applied_triples = extracted_triples
@@ -210,6 +220,7 @@ class LPLHAgent:
             logger.warning(f"Relation extraction failed: {e}")
             extracted_triples = [("ERROR", str(e), "")]
             applied_triples = extracted_triples
+        record_timing("fm_relation_extraction_and_kg_update", timer)
 
         detail["modules"]["kg_map"] = {
             "extracted_triples": [(s, r, o) for s, r, o in extracted_triples],
@@ -221,6 +232,7 @@ class LPLHAgent:
             "kg_map_context": self.kg_map.to_prompt_string(),
         }
 
+        timer = time.perf_counter()
         auxiliary_gate = self._run_auxiliary_gate(
             action=completed_action,
             observation=observation,
@@ -231,11 +243,14 @@ class LPLHAgent:
             inventory_before=inventory_before,
             visited_rooms_before=visited_rooms_before,
         )
+        record_timing("auxiliary_gate", timer)
         detail["modules"]["auxiliary_gate"] = auxiliary_gate
+        timer = time.perf_counter()
         inventory_reconciliation = self._apply_gate_inventory_update(
             auxiliary_gate=auxiliary_gate,
             inventory_before=inventory_before,
         )
+        record_timing("inventory_reconciliation", timer)
         detail["modules"]["inventory_reconciliation"] = inventory_reconciliation
         if inventory_reconciliation.get("applied"):
             detail["modules"]["kg_map"]["inventory"] = list(self.kg_map.inventory)
@@ -246,14 +261,19 @@ class LPLHAgent:
             auxiliary_gate.get("environmental_change_detection") or {}
         )
         if auxiliary_gate.get("use_legacy_environmental_detection"):
+            timer = time.perf_counter()
             environmental_change_detection = self._detect_environmental_change_with_llm(
                 action=completed_action,
                 observation=observation,
                 action_valid=action_valid,
             )
             environmental_change_detection["source"] = "legacy_fallback_after_gate_failure"
+            record_timing("legacy_environmental_detection", timer)
+        else:
+            module_timings["legacy_environmental_detection"] = 0.0
         detail["modules"]["environmental_change_detection"] = environmental_change_detection
 
+        timer = time.perf_counter()
         situation_detail = self._run_situation_manager(
             auxiliary_gate=auxiliary_gate,
             action=completed_action,
@@ -264,12 +284,14 @@ class LPLHAgent:
             prev_location=prev_location,
             inventory_before=inventory_before,
         )
+        record_timing("situation_manager", timer)
         detail["modules"]["situation_memory"] = situation_detail
         detail["modules"]["situation_manager"] = situation_detail
 
         experience_summary = None
         summary_log_entries = []
         experience_triggered = bool(done or (reward_change != 0 and action_valid is True))
+        score_summary_started = time.perf_counter()
         if experience_triggered:
             try:
                 history_text = self._format_history()
@@ -307,11 +329,13 @@ class LPLHAgent:
             except Exception as e:
                 logger.warning(f"Experience summarization failed: {e}")
                 experience_summary = f"ERROR: {e}"
+        record_timing("score_experience_summary", score_summary_started)
 
         neutral_triggers = []
         neutral_summaries = []
         neutral_summaries_skipped = []
         neutral_event_keys = []
+        neutral_summary_started = time.perf_counter()
         if reward_change == 0 and not done:
             neutral_triggers = self._detect_neutral_triggers(
                 observation=observation,
@@ -434,6 +458,7 @@ class LPLHAgent:
                         logger.info(f"Neutral experience stored: {trigger_type}")
                 except Exception as e:
                     logger.warning(f"Neutral experience failed ({trigger_type}): {e}")
+        record_timing("neutral_summary_triggers_and_summaries", neutral_summary_started)
 
         action_failure_memory = {
             "status": "not_applicable",
@@ -448,6 +473,7 @@ class LPLHAgent:
             "error": "",
         }
 
+        timer = time.perf_counter()
         if action_valid is True:
             self.consecutive_failures = 0
             self.recent_failed_actions = []
@@ -512,6 +538,7 @@ class LPLHAgent:
             )
         )
         detail["modules"]["action_failure_memory"] = action_failure_memory
+        record_timing("action_failure_memory", timer)
 
         location_changed_for_affordance = (
             bool(prev_location)
@@ -563,6 +590,7 @@ class LPLHAgent:
             or done
         )
 
+        timer = time.perf_counter()
         if action_valid is False:
             failure_record = action_failure_memory.get("stored_failure") or {}
             failure_reason = (
@@ -633,7 +661,9 @@ class LPLHAgent:
             self.state_action_memory.records_for_state(source_state_snapshot)
         )
         detail["modules"]["state_repetition_memory"] = state_repetition_memory
+        record_timing("state_repetition_memory", timer)
 
+        timer = time.perf_counter()
         affordance_attempt_memory = {
             "status": "not_applicable",
             "command": completed_action,
@@ -669,9 +699,12 @@ class LPLHAgent:
                 "state_signature": source_affordance_signature,
             }
         detail["modules"]["affordance_attempt_memory"] = affordance_attempt_memory
+        record_timing("affordance_attempt_memory", timer)
 
+        timer = time.perf_counter()
         query = f"Location: {self.kg_map.current_location}. Observation: {observation[:200]}"
         experiences = self.experience_lib.retrieve_relevant(query)
+        record_timing("experience_retrieval", timer)
 
         detail["modules"]["experience_lib"] = {
             "score_changed": reward_change != 0,
@@ -698,6 +731,9 @@ class LPLHAgent:
         detail["final_command"] = completed_action
 
         if done or not generate_next:
+            module_timings["next_action_generation_total"] = 0.0
+            module_timings["completed_step_total"] = round(time.perf_counter() - step_started, 4)
+            detail["modules"]["module_timings"] = module_timings
             self.prev_action = None
             self.pending_generation = None
             self.prev_score = score
@@ -708,6 +744,7 @@ class LPLHAgent:
                         f"loc='{self.kg_map.current_location}'")
             return ""
 
+        timer = time.perf_counter()
         command, generation = self._generate_command(
             observation,
             score,
@@ -720,6 +757,11 @@ class LPLHAgent:
                 "affordance_brainstorming", {}
             ),
         )
+        record_timing("next_action_generation_total", timer)
+        for key, value in (generation.get("timings") or {}).items():
+            module_timings[f"next_action_generation.{key}"] = value
+        module_timings["completed_step_total"] = round(time.perf_counter() - step_started, 4)
+        detail["modules"]["module_timings"] = module_timings
         detail["next_command"] = command
         detail["modules"]["next_action_generation"] = generation
         self.prev_action = command
@@ -755,6 +797,12 @@ class LPLHAgent:
                           reset_affordance_cache: bool = False,
                           affordance_gate_decision: dict = None) -> tuple:
         """Generate the next command and return it with prompt metadata."""
+        generation_started = time.perf_counter()
+        timings: dict[str, float] = {}
+
+        def record_timing(name: str, started_at: float):
+            timings[name] = round(time.perf_counter() - started_at, 4)
+
         initial_generation = self.step_count == 0 and self.prev_action is None
         room_info = self.kg_map.get_current_room_info()
         current_objects = room_info.get("objects", [])
@@ -774,6 +822,7 @@ class LPLHAgent:
         known_failed_here = self.failed_action_memory.format_for_prompt(
             self.kg_map.current_location or "unknown"
         )
+        retrieval_started = time.perf_counter()
         if experiences is None:
             if initial_generation:
                 print("  Initial action generation: retrieving experiences...", flush=True)
@@ -781,10 +830,12 @@ class LPLHAgent:
             experiences = self.experience_lib.retrieve_relevant(query)
             if initial_generation:
                 print("  Initial action generation: experience retrieval done.", flush=True)
+        record_timing("experience_retrieval_for_prompt", retrieval_started)
         stored_situations = self.situation_memory.format_for_prompt()
         action_space_context = self.action_space.to_prompt_string(current_objects)
         if initial_generation:
             print("  Initial action generation: running affordance brainstorm...", flush=True)
+        brainstorm_started = time.perf_counter()
         affordance_result = self._brainstorm_affordances(
             observation=observation,
             current_objects=current_objects,
@@ -797,6 +848,7 @@ class LPLHAgent:
             reset_cache=reset_affordance_cache,
             gate_decision=affordance_gate_decision,
         )
+        record_timing("affordance_brainstorming", brainstorm_started)
         if initial_generation:
             print(
                 "  Initial action generation: affordance brainstorm "
@@ -820,6 +872,7 @@ class LPLHAgent:
         )
 
         raw_llm_response = ""
+        main_llm_started = time.perf_counter()
         try:
             if initial_generation:
                 print("  Initial action generation: asking main LLM for command...", flush=True)
@@ -838,6 +891,8 @@ class LPLHAgent:
             logger.error(f"Action generation failed: {e}")
             raw_llm_response = f"ERROR: {e}"
             command = "look"
+        record_timing("main_llm_action_selection", main_llm_started)
+        timings["total"] = round(time.perf_counter() - generation_started, 4)
 
         generation = {
             "kg_map_context": self.kg_map.to_prompt_string(),
@@ -855,6 +910,7 @@ class LPLHAgent:
             "llm_raw_response": raw_llm_response,
             "parsed_command": command,
             "score_at_generation": score,
+            "timings": timings,
         }
         return command, generation
 

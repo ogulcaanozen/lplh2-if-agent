@@ -54,6 +54,7 @@ class GameRunner:
         self._action_failure_log_file = None
         self._action_generation_log_file = None
         self._auxiliary_gate_log_file = None
+        self._timing_log_file = None
         self._run_timestamp = None
         self._experiment_log_dir = None
         self._run_log_path = None
@@ -63,6 +64,7 @@ class GameRunner:
         self._action_failure_log_path = None
         self._action_generation_log_path = None
         self._auxiliary_gate_log_path = None
+        self._timing_log_path = None
         self._results_path = None
         self._step_log_path = None
         self._all_step_logs = []
@@ -94,6 +96,7 @@ class GameRunner:
         action_failure_log_path = os.path.join(self._experiment_log_dir, "action_failure_memory_log.txt")
         action_generation_log_path = os.path.join(self._experiment_log_dir, "action_generation_log.txt")
         auxiliary_gate_log_path = os.path.join(self._experiment_log_dir, "auxiliary_gate_log.txt")
+        timing_log_path = os.path.join(self._experiment_log_dir, "module_timing_log.txt")
         self._run_log_path = log_path
         self._summary_log_path = summary_log_path
         self._situation_log_path = situation_log_path
@@ -101,6 +104,7 @@ class GameRunner:
         self._action_failure_log_path = action_failure_log_path
         self._action_generation_log_path = action_generation_log_path
         self._auxiliary_gate_log_path = auxiliary_gate_log_path
+        self._timing_log_path = timing_log_path
         self._step_log_path = os.path.join(self._experiment_log_dir, "steplog.json")
         self._log_file = open(log_path, "w", encoding="utf-8", buffering=1)
         self._summary_log_file = open(summary_log_path, "w", encoding="utf-8", buffering=1)
@@ -115,6 +119,7 @@ class GameRunner:
         self._auxiliary_gate_log_file = open(
             auxiliary_gate_log_path, "w", encoding="utf-8", buffering=1
         )
+        self._timing_log_file = open(timing_log_path, "w", encoding="utf-8", buffering=1)
         aux_model = config.LLM_ES_MODEL or "LLM_a fallback"
         brainstorm_model = config.LLM_BRAINSTORM_MODEL or aux_model
         brainstorm_model_lower = (config.LLM_BRAINSTORM_MODEL or "").lower()
@@ -172,6 +177,11 @@ class GameRunner:
             f"LLM_es: {aux_model}\n"
         )
         self._auxiliary_gate_log_file.write("=" * 70 + "\n")
+        self._timing_log_file.write(f"LPLH2 Module Timing Log - {game_name}\n")
+        self._timing_log_file.write(
+            f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps}\n"
+        )
+        self._timing_log_file.write("=" * 70 + "\n")
         print(f"Experiment log dir: {self._experiment_log_dir}")
         print(f"Run log: {log_path}")
         print(f"Summary module log: {summary_log_path}")
@@ -180,6 +190,7 @@ class GameRunner:
         print(f"Action failure memory log: {action_failure_log_path}")
         print(f"Action generation log: {action_generation_log_path}")
         print(f"Auxiliary gate log: {auxiliary_gate_log_path}")
+        print(f"Module timing log: {timing_log_path}")
 
         # Initialize LPLH agent
         llm = LLMClient()
@@ -314,6 +325,9 @@ class GameRunner:
             if self._auxiliary_gate_log_file:
                 self._auxiliary_gate_log_file.close()
                 self._auxiliary_gate_log_file = None
+            if self._timing_log_file:
+                self._timing_log_file.close()
+                self._timing_log_file = None
             elapsed = time.time() - start_time
             logs_for_save = self._logs_for_save()
 
@@ -344,6 +358,7 @@ class GameRunner:
             print(f"  Action failure log: {self._action_failure_log_path}")
             print(f"  Action generation log: {self._action_generation_log_path}")
             print(f"  Auxiliary gate log: {self._auxiliary_gate_log_path}")
+            print(f"  Module timing log: {self._timing_log_path}")
             print(f"  Step log: {self._step_log_path}")
             print(f"  Results: {self._results_path}")
             print(f"  Total Time: {elapsed:.1f}s")
@@ -385,6 +400,7 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
+            "timing_log_path": self._timing_log_path,
             "step_log_path": self._step_log_path,
         }
 
@@ -774,6 +790,7 @@ class GameRunner:
         self._log_affordance_brainstorm_step(epoch, step, d)
         self._log_action_failure_memory_step(epoch, step, d)
         self._log_action_generation_step(epoch, step, d)
+        self._log_module_timing_step(epoch, step, d)
 
     def _log_summary_module_step(self, epoch: int, step: int, detail: dict):
         """Write prompt+summary records for newly stored summaries."""
@@ -828,6 +845,18 @@ class GameRunner:
         self._situation_log_file.write("-" * 90 + "\n")
         self._situation_log_file.write("metadata:\n")
         self._situation_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
+        self._situation_log_file.write("\n\naux gate situation_manager decision:\n")
+        self._situation_log_file.write(
+            json.dumps(entry.get("gate_decision", {}), indent=2, ensure_ascii=False)
+        )
+        self._situation_log_file.write("\n\naux gate stored_situation_detection decision:\n")
+        self._situation_log_file.write(
+            json.dumps(
+                entry.get("stored_situation_detection_gate", {}),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         self._situation_log_file.write("\n\nprompt:\n")
         self._situation_log_file.write(str(entry.get("prompt", "")))
         self._situation_log_file.write("\n\nllm response:\n")
@@ -960,6 +989,52 @@ class GameRunner:
             self._auxiliary_gate_log_file.write("\n\nerror:\n")
             self._auxiliary_gate_log_file.write(str(entry.get("error")))
         self._auxiliary_gate_log_file.write("\n" + "=" * 90 + "\n")
+
+    def _log_module_timing_step(self, epoch: int, step: int, detail: dict):
+        """Write per-step module durations for optimization analysis."""
+        if not self._timing_log_file:
+            return
+
+        modules = detail.get("modules", {})
+        timings = modules.get("module_timings", {}) or {}
+        if not timings:
+            return
+
+        total = timings.get("completed_step_total", 0.0) or 0.0
+        sorted_timings = sorted(
+            timings.items(),
+            key=lambda item: float(item[1] or 0.0),
+            reverse=True,
+        )
+        metadata = {
+            "step": detail.get("step"),
+            "action": detail.get("executed_action") or detail.get("prev_action"),
+            "next_command": detail.get("next_command"),
+            "score": detail.get("score"),
+            "reward_change": detail.get("reward_change"),
+            "location": (modules.get("kg_map", {}) or {}).get("current_location"),
+            "total_seconds": total,
+        }
+
+        self._timing_log_file.write("\n" + "=" * 90 + "\n")
+        self._timing_log_file.write(
+            f"[EPOCH {epoch} | STEP {step:03d}] total={total:.4f}s "
+            f"action={metadata.get('action')}\n"
+        )
+        self._timing_log_file.write("-" * 90 + "\n")
+        self._timing_log_file.write("metadata:\n")
+        self._timing_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
+        self._timing_log_file.write("\n\nmodule timings, slowest first:\n")
+        for name, seconds in sorted_timings:
+            try:
+                seconds_float = float(seconds)
+            except (TypeError, ValueError):
+                seconds_float = 0.0
+            pct = (seconds_float / total * 100.0) if total else 0.0
+            self._timing_log_file.write(f"- {name}: {seconds_float:.4f}s ({pct:.1f}%)\n")
+        self._timing_log_file.write("\nraw timings:\n")
+        self._timing_log_file.write(json.dumps(timings, indent=2, ensure_ascii=False))
+        self._timing_log_file.write("\n" + "=" * 90 + "\n")
 
     def _log_affordance_brainstorm_step(self, epoch: int, step: int, detail: dict):
         """Write the affordance brainstorm prompt/response for every generated action."""
@@ -1168,6 +1243,7 @@ class GameRunner:
             "score": score,
             "affordance_status": aff.get("status"),
             "affordance_ideas": len(aff.get("ideas", [])),
+            "generation_timings": generation.get("timings", {}),
         }
 
         self._action_generation_log_file.write("\n" + "=" * 90 + "\n")
@@ -1195,6 +1271,10 @@ class GameRunner:
         self._action_generation_log_file.write(str(generation.get("same_state_tried_commands", "[]")))
         self._action_generation_log_file.write("\n\naction space context:\n")
         self._action_generation_log_file.write(str(generation.get("action_space_context", "")))
+        self._action_generation_log_file.write("\n\naction generation timings:\n")
+        self._action_generation_log_file.write(
+            json.dumps(generation.get("timings", {}), indent=2, ensure_ascii=False)
+        )
         self._action_generation_log_file.write("\n\nmain LLM extracted reasoning:\n")
         self._action_generation_log_file.write(reasoning or "(none extracted)")
         self._action_generation_log_file.write("\n\nmain LLM raw response:\n")
@@ -1244,6 +1324,7 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
+            "timing_log_path": self._timing_log_path,
             "step_log_path": self._step_log_path,
             "elapsed_seconds": elapsed,
             "timestamp": datetime.now().isoformat(),
@@ -1264,6 +1345,7 @@ class GameRunner:
         results["action_failure_log_path"] = self._action_failure_log_path
         results["action_generation_log_path"] = self._action_generation_log_path
         results["auxiliary_gate_log_path"] = self._auxiliary_gate_log_path
+        results["timing_log_path"] = self._timing_log_path
         results["step_log_path"] = self._step_log_path
         results["results_path"] = self._results_path
 
@@ -1293,6 +1375,7 @@ class GameRunner:
             "action_failure_log_path": self._action_failure_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
+            "timing_log_path": self._timing_log_path,
             "results_path": self._results_path,
             "epochs": all_step_logs,
         }
