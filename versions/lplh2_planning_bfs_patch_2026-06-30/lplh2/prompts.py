@@ -632,7 +632,8 @@ traveling to the target.
 Plans are advisory. They should help the main action LLM reason, not force it.
 Keep plans short and concrete:
 - suggested_preparation: commands to consider before traveling/trying the target
-- commands_to_try_at_target: commands to consider after reaching the target
+- target_goal: what to accomplish at the target; exact target commands are the
+  affordance brainstorming module's job
 
 Return JSON only between |start| and |end|:
 
@@ -661,7 +662,7 @@ Return JSON only between |start| and |end|:
     }},
     "reason": "short observation-based reason",
     "suggested_preparation": ["short commands to consider before target"],
-    "commands_to_try_at_target": ["short commands to consider at target"]
+    "target_goal": "short goal to pursue at the target"
   }}
 }}
 |end|
@@ -703,7 +704,7 @@ Output:
     "related_situation": {{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}},
     "reason": "The lantern is visible and may address the remembered dark area, but it is not in inventory.",
     "suggested_preparation": ["take lantern", "turn on lantern"],
-    "commands_to_try_at_target": ["up", "look"]
+    "target_goal": "safely explore the remembered dark upstairs area with light"
   }}
 }}
 |end|
@@ -712,7 +713,7 @@ Example 2: preparation completed semantically
 Previous Action: get lantern
 Observation After Action: Taken.
 Current Inventory: ["sword", "lantern"]
-Active Plan Already Stored: {{"target_location":"Kitchen / upstairs","related_situation":{{"location":"Kitchen / upstairs","situation":"dark upstairs area may require light"}},"suggested_preparation":["take lantern","turn on lantern"],"commands_to_try_at_target":["up","look"]}}
+Active Plan Already Stored: {{"target_location":"Kitchen / upstairs","related_situation":{{"location":"Kitchen / upstairs","situation":"dark upstairs area may require light"}},"suggested_preparation":["take lantern","turn on lantern"],"target_goal":"safely explore the remembered dark upstairs area with light"}}
 Output:
 |start|
 {{
@@ -723,7 +724,7 @@ Output:
     "related_situation": {{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}},
     "reason": "The lantern is now in inventory, so only turning it on remains before trying the dark area.",
     "suggested_preparation": ["turn on lantern"],
-    "commands_to_try_at_target": ["up", "look"]
+    "target_goal": "safely explore the remembered dark upstairs area with light"
   }}
 }}
 |end|
@@ -742,7 +743,7 @@ Output:
     "related_situation": {{"location": "", "situation": ""}},
     "reason": "No unresolved future-return situation or active plan is affected.",
     "suggested_preparation": [],
-    "commands_to_try_at_target": []
+    "target_goal": ""
   }}
 }}
 |end|
@@ -1082,6 +1083,10 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 8. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
 9. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
 10. Recent same-location command outcomes. If several different commands in the same location produce similarly repeated, echoed, garbled, obscured, blocked, mismatched, or condition-dominated observations, consider whether a persistent environmental/perceptual/mental/parser-like condition is interfering with normal command effects.
+11. Active Plan. If an advisory active plan exists, consider its target_goal and
+    suggested_preparation when proposing commands. Do not blindly follow the
+    plan, but do propose concrete commands that help with it when they fit the
+    current room, inventory, visible objects, or stored situation.
 
 **Output Rules:**
 - Output JSON only between |start| and |end|.
@@ -1115,6 +1120,7 @@ Current Location: Living Room
 Observation: "There is a trophy case here. A battery-powered brass lantern is on the trophy case. Above the trophy case hangs an elvish sword. There is a large oriental rug in the center of the room."
 Inventory: ["sack", "bottle"]
 Active Stored Situations: [{{"location": "Kitchen / upstairs", "situation": "dark upstairs area may require light"}}]
+Active Plan: {{"target_location":"Kitchen / upstairs","related_situation":{{"location":"Kitchen / upstairs","situation":"dark upstairs area may require light"}},"suggested_preparation":["take lantern","turn on lantern"],"target_goal":"safely explore the remembered dark upstairs area with light"}}
 Recent Failed Commands: ["take lantern from trophy case"]
 Output:
 |start|
@@ -1216,6 +1222,7 @@ Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}
 Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
+Active Plan: {active_plan}
 Learned Action Space Here: {action_space}
 Retrieved Experiences: {experiences}"""
 

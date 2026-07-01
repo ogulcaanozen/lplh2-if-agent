@@ -589,6 +589,7 @@ class LLMClient:
                                same_state_tried_commands: list,
                                pending_carryover_commands: list,
                                stored_situations: list,
+                               active_plan: dict | None,
                                action_space: str,
                                experiences: str,
                                score: int = 0) -> str:
@@ -606,6 +607,7 @@ class LLMClient:
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
             pending_carryover_commands=json.dumps(pending_carryover_commands or [], ensure_ascii=False),
             stored_situations=json.dumps(stored_situations or [], ensure_ascii=False),
+            active_plan=json.dumps(active_plan or None, ensure_ascii=False),
             action_space=action_space or "No learned action-space context available.",
             experiences=experiences or "No relevant experiences found yet.",
             score=score,

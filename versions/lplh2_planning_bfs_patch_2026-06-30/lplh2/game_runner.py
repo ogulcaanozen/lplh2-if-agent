@@ -1113,6 +1113,7 @@ class GameRunner:
             "status": entry.get("status", "missing"),
             "visible_objects": entry.get("visible_objects", []),
             "inventory": entry.get("inventory", []),
+            "active_plan": entry.get("active_plan"),
             "recent_failed_commands": entry.get("recent_failed_commands", []),
             "failed_commands": entry.get("failed_commands", []),
             "unproductive_commands": entry.get("unproductive_commands", []),

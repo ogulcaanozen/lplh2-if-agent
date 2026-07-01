@@ -1029,6 +1029,7 @@ class LPLHAgent:
             "pending_carryover_commands": [],
             "failed_command_verbs": failure_context["failed_verbs"],
             "active_situations": list(stored_situations or []),
+            "active_plan": self.active_plan_memory.active_plan(),
             "score": score,
             "state_signature": state_signature,
             "reset_cache": reset_cache,
@@ -1107,6 +1108,7 @@ class LPLHAgent:
                 same_state_tried_commands=list(same_state_tried_commands or []),
                 pending_carryover_commands=result["pending_carryover_commands"],
                 stored_situations=result["active_situations"],
+                active_plan=self.active_plan_memory.active_plan(),
                 action_space=action_space_context,
                 experiences=experiences,
                 score=score,
@@ -1600,9 +1602,7 @@ class LPLHAgent:
             "suggested_preparation": self._clean_gate_command_list(
                 value.get("suggested_preparation", [])
             ),
-            "commands_to_try_at_target": self._clean_gate_command_list(
-                value.get("commands_to_try_at_target", [])
-            ),
+            "target_goal": self._clean_text(value.get("target_goal", "")),
         }
 
     def _clean_gate_command_list(self, value) -> list[str]:
@@ -1728,7 +1728,7 @@ class LPLHAgent:
                 },
                 "reason": "Gate unavailable.",
                 "suggested_preparation": [],
-                "commands_to_try_at_target": [],
+                "target_goal": "",
             },
         }
 
@@ -2317,9 +2317,7 @@ class LPLHAgent:
             "suggested_preparation": self._clean_gate_command_list(
                 value.get("suggested_preparation", [])
             ),
-            "commands_to_try_at_target": self._clean_gate_command_list(
-                value.get("commands_to_try_at_target", [])
-            ),
+            "target_goal": self._clean_text(value.get("target_goal", "")),
         }
 
     def _apply_situation_manager_decision(self, decision: dict) -> dict:
@@ -2393,7 +2391,7 @@ class LPLHAgent:
                 "related_situation": plan_decision.get("related_situation", {}),
                 "reason": plan_decision.get("reason", ""),
                 "suggested_preparation": plan_decision.get("suggested_preparation", []),
-                "commands_to_try_at_target": plan_decision.get("commands_to_try_at_target", []),
+                "target_goal": plan_decision.get("target_goal", ""),
             }
             applied = self.active_plan_memory.set_plan(
                 plan_payload,

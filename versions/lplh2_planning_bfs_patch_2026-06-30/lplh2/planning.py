@@ -115,6 +115,7 @@ class ActivePlanMemory:
         return bool(self._plan) and self.situation_key() == self._situation_key(situation)
 
     def target_commands(self) -> list[str]:
+        """Compatibility accessor for older plan records."""
         if not self._plan:
             return []
         return list(self._plan.get("commands_to_try_at_target", []) or [])
@@ -137,9 +138,7 @@ class ActivePlanMemory:
             "suggested_preparation": self._clean_command_list(
                 plan.get("suggested_preparation", [])
             ),
-            "commands_to_try_at_target": self._clean_command_list(
-                plan.get("commands_to_try_at_target", [])
-            ),
+            "target_goal": self._clean(plan.get("target_goal")),
         }
 
     def _clean_command_list(self, value: Any) -> list[str]:
