@@ -1320,8 +1320,6 @@ class GameRunner:
         self._action_generation_log_file.write(str(generation.get("known_failed_commands_here", "[]")))
         self._action_generation_log_file.write("\n\nsame-state tried commands:\n")
         self._action_generation_log_file.write(str(generation.get("same_state_tried_commands", "[]")))
-        self._action_generation_log_file.write("\n\ncommand context:\n")
-        self._action_generation_log_file.write(str(generation.get("command_context", "")))
         self._action_generation_log_file.write("\n\naction generation timings:\n")
         self._action_generation_log_file.write(
             json.dumps(generation.get("timings", {}), indent=2, ensure_ascii=False)

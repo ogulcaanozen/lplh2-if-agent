@@ -211,9 +211,6 @@ Your internal reasoning steps Here.
 === CURRENT GAME MAP ===
 {kg_map}
 
-=== ACTION-SPACE STATUS ===
-{action_pairs}
-
 === RETRIEVED EXPERIENCES ===
 {experiences}
 
@@ -1361,7 +1358,6 @@ Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}
 Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
-Command Context: {command_context}
 Retrieved Experiences: {experiences}"""
 
 

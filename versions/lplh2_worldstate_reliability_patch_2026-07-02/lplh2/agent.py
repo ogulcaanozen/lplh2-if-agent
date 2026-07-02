@@ -29,12 +29,6 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-COMMAND_CONTEXT = (
-    "No learned command-template list is used. Use the current observation, inventory, "
-    "KG map, stored situations, failed-command memory, same-state attempts, "
-    "retrieved experiences, and affordance agenda instead."
-)
-
 
 class LPLHAgent:
     """LPLH Agent for playing Interactive Fiction games.
@@ -748,7 +742,6 @@ class LPLHAgent:
 
         room_info = self.kg_map.get_current_room_info()
         current_objects = room_info.get("objects", [])
-        detail["modules"]["action_validation"]["command_context"] = COMMAND_CONTEXT
         detail["modules"]["action_generation"] = self.pending_generation or {
             "parsed_command": completed_action,
         }
@@ -938,7 +931,6 @@ class LPLHAgent:
                 print("  Initial action generation: experience retrieval done.", flush=True)
         record_timing("experience_retrieval_for_prompt", retrieval_started)
         stored_situations = self.situation_memory.format_for_prompt()
-        command_context = COMMAND_CONTEXT
         if initial_generation:
             print("  Initial action generation: running affordance brainstorm...", flush=True)
         brainstorm_started = time.perf_counter()
@@ -946,7 +938,6 @@ class LPLHAgent:
             observation=observation,
             current_objects=current_objects,
             stored_situations=self.situation_memory.active_situations(),
-            command_context=command_context,
             known_failed_here=known_failed_here,
             same_state_tried_commands=same_state_tried_commands,
             experiences=experiences,
@@ -965,7 +956,6 @@ class LPLHAgent:
 
         prompt = LPLH_ACTION_GENERATION_PROMPT.format(
             kg_map=self.kg_map.to_prompt_string(),
-            action_pairs=command_context,
             experiences=experiences,
             stored_situations=stored_situations,
             brainstormed_command_ideas=brainstormed_command_ideas,
@@ -1002,7 +992,6 @@ class LPLHAgent:
 
         generation = {
             "kg_map_context": self.kg_map.to_prompt_string(),
-            "command_context": command_context,
             "retrieved_experiences": experiences,
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
@@ -1022,7 +1011,6 @@ class LPLHAgent:
 
     def _brainstorm_affordances(self, observation: str, current_objects: list,
                                 stored_situations: list,
-                                command_context: str,
                                 known_failed_here: str,
                                 same_state_tried_commands: list[str],
                                 experiences: str,
@@ -1160,7 +1148,6 @@ class LPLHAgent:
                 same_state_tried_commands=list(same_state_tried_commands or []),
                 pending_carryover_commands=result["pending_carryover_commands"],
                 stored_situations=result["active_situations"],
-                command_context=command_context,
                 experiences=experiences,
                 score=score,
             )
