@@ -157,7 +157,7 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Inventory Is Authoritative**: Treat only items listed in the current inventory/map inventory as carried. A visible object, an opened object, or an object whose state changed is not in your possession unless it appears in inventory.
 - **Visible Tools Must Be Taken First**: If a visible object could solve a stored situation but is not in inventory, consider taking it before using it or leaving the room. For example, if a light source is visible but not carried, preparation should include taking it before relying on it in a dark area.
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. A stored situation may include a possible_solution sentence. If your current location, inventory, visible objects, or known map makes that possible solution actionable now, consider addressing it; otherwise continue useful exploration.
-- **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
+- **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs that have not appeared before. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
 - **Condition-Level Agenda**: Some affordance agenda entries may have "kind": "condition"; these target a room/environment/perception/parser condition rather than one visible object. Consider them when recent observations suggest normal commands are being distorted, obscured, blocked, or mismatched.
 - **Known Failed Commands Here**: These commands failed before at this location under the recorded world state. Avoid repeating them unless the current observation, inventory, visible objects, or score have changed enough to give a concrete reason to retry.
 - **Same-State Tried Commands**: These commands were already tried from the exact same state snapshot shown now. Treat them as strong cautionary evidence. Prefer a different command unless you can name a concrete state difference or a strong reason the retry is still useful.
@@ -211,7 +211,7 @@ Your internal reasoning steps Here.
 === CURRENT GAME MAP ===
 {kg_map}
 
-=== LEARNED ACTION TEMPLATES (REFERENCE ONLY; NOT A COMMAND LIST) ===
+=== ACTION-SPACE STATUS ===
 {action_pairs}
 
 === RETRIEVED EXPERIENCES ===
@@ -1210,7 +1210,7 @@ You are brainstorming possible commands for a text-based interactive fiction gam
 
 You are NOT choosing the final next action. Your job is to propose a small set of concrete parser-friendly commands that a skilled player would consider trying next.
 
-The final action selector will receive your suggestions along with the map, action space, memories, and current observation.
+The final action selector will receive your suggestions along with the map, memories, and current observation.
 
 This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should run and produce ideas even when there are no active stored situations. Stored situations are only extra context that may suggest additional useful commands. When recent same-location command outcomes show that normal interaction is being distorted, blocked, obscured, or mismatched by a persistent condition, also brainstorm condition-level commands.
 
@@ -1237,7 +1237,7 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
   - "commands_to_try": concrete game commands to try.
 - Do not include priority, confidence, why_it_matters, when_to_stop, or long explanations.
 - Use simple canonical commands that IF parsers usually understand.
-- You may suggest useful verbs that are not in the learned action space.
+- You may suggest useful verbs even if they have not appeared before.
 - Do suggest interactions for newly observed objects even if no stored situation exists. Example: a visible rug can suggest "move rug", "lift rug", and "look under rug".
 - Keep commands short and directly executable: "take lantern", "turn on lantern", "move rug", "look under rug".
 - Do not repeat an exact recent failed command.
@@ -1361,7 +1361,7 @@ Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}
 Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
-Learned Action Space Here: {action_space}
+Command Context: {command_context}
 Retrieved Experiences: {experiences}"""
 
 

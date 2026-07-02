@@ -630,7 +630,7 @@ class LLMClient:
                                same_state_tried_commands: list,
                                pending_carryover_commands: list,
                                stored_situations: list,
-                               action_space: str,
+                               command_context: str,
                                experiences: str,
                                score: int = 0) -> str:
         """Suggest concrete commands for visible objects, inventory, and stored situations."""
@@ -647,7 +647,7 @@ class LLMClient:
             same_state_tried_commands=json.dumps(same_state_tried_commands or [], ensure_ascii=False),
             pending_carryover_commands=json.dumps(pending_carryover_commands or [], ensure_ascii=False),
             stored_situations=json.dumps(stored_situations or [], ensure_ascii=False),
-            action_space=action_space or "No learned action-space context available.",
+            command_context=command_context or "No learned command-template context available.",
             experiences=experiences or "No relevant experiences found yet.",
             score=score,
         )

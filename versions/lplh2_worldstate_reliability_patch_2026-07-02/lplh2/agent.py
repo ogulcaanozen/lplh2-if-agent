@@ -2,7 +2,7 @@
 
 The main agent that ties all three modules together:
 1. Dynamic KG-Map (spatial reasoning)
-2. Action Space Learning (verb-object discovery)
+2. Previous-action validation
 3. Experience Library (reflective learning via RAG)
 
 At each step, it integrates all module outputs with the current
@@ -18,7 +18,6 @@ import hashlib
 import json
 import time
 from .kg_map import KGMap
-from .action_space import ActionSpace
 from .experience_lib import ExperienceLib
 from .opportunity_module import SituationMemory
 from .affordance_brainstormer import AffordanceBrainstormer
@@ -30,13 +29,19 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+COMMAND_CONTEXT = (
+    "No learned command-template list is used. Use the current observation, inventory, "
+    "KG map, stored situations, failed-command memory, same-state attempts, "
+    "retrieved experiences, and affordance agenda instead."
+)
+
 
 class LPLHAgent:
     """LPLH Agent for playing Interactive Fiction games.
 
-    Implements the full LPLH pipeline from the paper (Section 3.5):
+    Implements the LPLH-style gameplay pipeline:
     1. Update KG-map with extracted relations
-    2. Validate & store action in action space
+    2. Validate the previous action
     3. Summarize experience on score change
     4. Retrieve relevant experiences
     5. Generate next command via zero-shot LLM
@@ -45,10 +50,10 @@ class LPLHAgent:
     def __init__(self, llm_client: LLMClient = None, fm_client: FmClient = None):
         # LLM_a (action generation + experience summarization fallback)
         self.llm = llm_client or LLMClient()
-        # fm (3 paper-faithful structured tasks: validate / extract / split)
+        # fm structured tasks used at runtime: validate / extract.
+        # Action-space learning is disabled in this version; do not split/store verbs.
         self.fm = fm_client or FmClient()
         self.kg_map = KGMap()
-        self.action_space = ActionSpace()
         self.experience_lib = ExperienceLib()
         self.situation_memory = SituationMemory()
         self.affordance_brainstormer = AffordanceBrainstormer()
@@ -77,12 +82,10 @@ class LPLHAgent:
         Args:
             keep_experiences: If True, keep learning state across epochs.
                             Experience Library always persists in this mode;
-                            Action Space also persists when configured.
+                            situation/action memories also persist.
                             If False, perform a full reset.
         """
         self.kg_map.reset()
-        if not keep_experiences or not config.PERSIST_ACTION_SPACE:
-            self.action_space.reset()
         if not keep_experiences:
             self.experience_lib.reset()
             self.situation_memory.reset()
@@ -169,7 +172,6 @@ class LPLHAgent:
         inventory_before = set(self.kg_map.inventory)
 
         action_valid = None
-        action_split = None
         timer = time.perf_counter()
         try:
             is_valid = self.fm.validate_action(completed_action, observation)
@@ -177,22 +179,18 @@ class LPLHAgent:
             prev_lower = completed_action.lower().strip()
             if is_valid is False and prev_lower in self.kg_map._direction_set():
                 self.kg_map.mark_direction_tried(prev_lower)
-            if is_valid:
-                split = self.fm.split_action(completed_action)
-                action_split = split
-                self.action_space.store_action(split["verb"], split["objects"])
-                logger.debug(f"Valid action stored: {split}")
         except Exception as e:
-            logger.warning(f"Action validation/splitting failed: {e}")
+            logger.warning(f"Action validation failed: {e}")
             action_valid = f"ERROR: {e}"
-        record_timing("fm_action_validation_and_split", timer)
+        record_timing("fm_action_validation", timer)
 
-        detail["modules"]["action_space"] = {
+        detail["modules"]["action_validation"] = {
+            "status": "Validation-only mode; no verb splitting or learned-verb storage is used.",
             "prev_action_valid": action_valid,
-            "action_split": action_split,
-            "total_verbs": len(self.action_space.verbs),
-            "total_actions_learned": self.action_space.num_actions(),
-            "all_verbs": list(self.action_space.verbs.keys()),
+            "action_split": None,
+            "total_verbs": 0,
+            "total_actions_learned": 0,
+            "all_verbs": [],
         }
 
         extracted_triples = []
@@ -750,9 +748,7 @@ class LPLHAgent:
 
         room_info = self.kg_map.get_current_room_info()
         current_objects = room_info.get("objects", [])
-        detail["modules"]["action_space"]["action_space_context"] = (
-            self.action_space.to_prompt_string(current_objects)
-        )
+        detail["modules"]["action_validation"]["command_context"] = COMMAND_CONTEXT
         detail["modules"]["action_generation"] = self.pending_generation or {
             "parsed_command": completed_action,
         }
@@ -942,7 +938,7 @@ class LPLHAgent:
                 print("  Initial action generation: experience retrieval done.", flush=True)
         record_timing("experience_retrieval_for_prompt", retrieval_started)
         stored_situations = self.situation_memory.format_for_prompt()
-        action_space_context = self.action_space.to_prompt_string(current_objects)
+        command_context = COMMAND_CONTEXT
         if initial_generation:
             print("  Initial action generation: running affordance brainstorm...", flush=True)
         brainstorm_started = time.perf_counter()
@@ -950,7 +946,7 @@ class LPLHAgent:
             observation=observation,
             current_objects=current_objects,
             stored_situations=self.situation_memory.active_situations(),
-            action_space_context=action_space_context,
+            command_context=command_context,
             known_failed_here=known_failed_here,
             same_state_tried_commands=same_state_tried_commands,
             experiences=experiences,
@@ -969,7 +965,7 @@ class LPLHAgent:
 
         prompt = LPLH_ACTION_GENERATION_PROMPT.format(
             kg_map=self.kg_map.to_prompt_string(),
-            action_pairs=action_space_context,
+            action_pairs=command_context,
             experiences=experiences,
             stored_situations=stored_situations,
             brainstormed_command_ideas=brainstormed_command_ideas,
@@ -1006,7 +1002,7 @@ class LPLHAgent:
 
         generation = {
             "kg_map_context": self.kg_map.to_prompt_string(),
-            "action_space_context": action_space_context,
+            "command_context": command_context,
             "retrieved_experiences": experiences,
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
@@ -1026,7 +1022,7 @@ class LPLHAgent:
 
     def _brainstorm_affordances(self, observation: str, current_objects: list,
                                 stored_situations: list,
-                                action_space_context: str,
+                                command_context: str,
                                 known_failed_here: str,
                                 same_state_tried_commands: list[str],
                                 experiences: str,
@@ -1164,7 +1160,7 @@ class LPLHAgent:
                 same_state_tried_commands=list(same_state_tried_commands or []),
                 pending_carryover_commands=result["pending_carryover_commands"],
                 stored_situations=result["active_situations"],
-                action_space=action_space_context,
+                command_context=command_context,
                 experiences=experiences,
                 score=score,
             )
@@ -2835,7 +2831,8 @@ class LPLHAgent:
             "step": self.step_count,
             "score": self.total_score,
             "rooms_visited": self.kg_map.num_rooms(),
-            "actions_learned": self.action_space.num_actions(),
+            "actions_learned": 0,
+            "command_template_learning_disabled": True,
             "experiences_stored": self.experience_lib.num_experiences(),
             "situations_stored": len(self.situation_memory.active_situations()),
             "failed_action_memory": self.failed_action_memory.to_dict(),
