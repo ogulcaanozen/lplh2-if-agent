@@ -5,6 +5,7 @@ Interactive Fiction games by simulating human gameplay behaviors.
 
 Modules:
     - kg_map: Dynamic Knowledge Graph Map
+    - action_space: Verb-object action space learning
     - action_memory: Failed and same-state action memory
     - experience_lib: Experience Library with RAG
     - agent: LPLH Agent (zero-shot decision-making)

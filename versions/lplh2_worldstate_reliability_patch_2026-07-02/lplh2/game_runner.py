@@ -259,6 +259,7 @@ class GameRunner:
                       f"Max Score: {epoch_result['max_score']}  |  "
                       f"Steps Used: {epoch_result['steps_used']}")
                 print(f"  Rooms: {epoch_result['rooms_visited']}  |  "
+                      f"Actions Learned: {epoch_result.get('actions_learned', 0)}  |  "
                       f"Experiences: {epoch_result['experiences_stored']}  |  "
                       f"Situations: {epoch_result.get('situations_stored', 0)}")
 
@@ -267,6 +268,10 @@ class GameRunner:
                 rooms_str = ", ".join(rooms) if rooms else "(none)"
                 print(f"\n  KG-Map Rooms ({len(rooms)}):")
                 print(f"    {rooms_str}")
+                verbs = sorted(agent.action_space.verbs.keys())
+                verbs_str = ", ".join(verbs) if verbs else "(none)"
+                print(f"\n  Learned Verbs ({len(verbs)}):")
+                print(f"    {verbs_str}")
 
                 print(f"{'─'*70}\n")
 
@@ -277,12 +282,18 @@ class GameRunner:
                         f"EPOCH {epoch} SUMMARY\n"
                         f"  Final Score : {epoch_result['final_score']}\n"
                         f"  Steps Used  : {epoch_result['steps_used']}\n"
+                        f"  Actions     : {epoch_result.get('actions_learned', 0)}\n"
                         f"  Experiences : {epoch_result['experiences_stored']}\n"
                         f"  Situations  : {epoch_result.get('situations_stored', 0)}\n"
                     )
                     self._log_file.write(f"\n  KG-Map Rooms ({len(rooms)}):\n")
                     for r in rooms:
                         self._log_file.write(f"    - {r}\n")
+                    self._log_file.write(f"\n  Learned Verbs ({len(verbs)}):\n")
+                    for v in verbs:
+                        objs = sorted(agent.action_space.verbs[v])
+                        obj_text = ", ".join(objs) if objs else "(no objects)"
+                        self._log_file.write(f"    - {v}: {obj_text}\n")
                     self._log_file.write("=" * 70 + "\n")
         except KeyboardInterrupt:
             print("\n\n🛑 Run interrupted by user (Ctrl+C). Saving partial results...")
@@ -547,11 +558,22 @@ class GameRunner:
             print(f"  │     Inventory: {', '.join(inv)}", flush=True)
 
         # ── Previous action validation ────────────────────────
-        act_mod = modules.get("action_validation", {})
+        act_mod = modules.get("action_space", {})
         valid = act_mod.get("prev_action_valid")
         if valid is not None:
             status = "✅ Valid" if valid is True else ("❌ Invalid" if valid is False else f"⚠️ {valid}")
-            print(f"  │  Prev action: {status}", flush=True)
+            split = act_mod.get("action_split")
+            split_txt = ""
+            if split:
+                split_txt = f" -> verb='{split.get('verb')}' obj={split.get('objects')}"
+            print(
+                f"  │  ⚡ Action Space ({act_mod.get('total_actions_learned', 0)} learned): "
+                f"prev_action {status}{split_txt}",
+                flush=True,
+            )
+            verbs = act_mod.get("all_verbs", [])
+            if verbs:
+                print(f"  │     Verbs: {', '.join(verbs)}", flush=True)
 
         fail_mem = modules.get("action_failure_memory", {})
         if fail_mem.get("stored_failure"):
@@ -645,7 +667,7 @@ class GameRunner:
         d = agent.step_details[-1]
         modules = d.get("modules", {})
         kg = modules.get("kg_map", {})
-        act_mod = modules.get("action_validation", {})
+        act_mod = modules.get("action_space", {})
         gen = modules.get("action_generation", {})
         exp = modules.get("experience_lib", {})
 
@@ -685,10 +707,14 @@ class GameRunner:
         lines.append("\n[INVENTORY RECONCILER STRUCTURED UPDATE]")
         lines.append(json.dumps(inv_rec.get("raw_update", {}), indent=2, ensure_ascii=False))
 
-        # ── Previous action validation ────────────────────────
-        lines.append(section("ACTION VALIDATION"))
+        # ── Action Space ────────────────────────
+        lines.append(section("ACTION SPACE"))
         lines.append(f"Previous action valid: {act_mod.get('prev_action_valid')}")
-        lines.append(f"Status: {act_mod.get('status', 'validation only')}")
+        lines.append(f"Action split: {act_mod.get('action_split')}")
+        lines.append(f"Total learned actions: {act_mod.get('total_actions_learned', 0)}")
+        lines.append(f"All verbs: {act_mod.get('all_verbs', [])}")
+        lines.append("\n[ACTION SPACE CONTEXT]")
+        lines.append(act_mod.get("action_space_context", gen.get("action_space_context", "N/A")))
 
         # ── Experience Library ────────────────────────────────
         lines.append(section("EXPERIENCE LIBRARY"))
@@ -774,11 +800,11 @@ class GameRunner:
             lines.append(section("REASONING (extracted)"))
             lines.append(rea_match.group(1).strip())
 
-        # ── Prev Action Validation ────────────────────────────
+        # ── Prev Action / Action Space ────────────────────────────
         valid = act_mod.get("prev_action_valid")
         split = act_mod.get("action_split")
         if valid is not None:
-            lines.append(section("PREV ACTION VALIDATION"))
+            lines.append(section("PREV ACTION / ACTION SPACE"))
             lines.append(f"Valid: {valid}")
             if isinstance(split, dict):
                 lines.append(f"Verb: {split.get('verb')}  |  Objects: {split.get('objects')}")
@@ -1102,6 +1128,7 @@ class GameRunner:
             "failed_commands": entry.get("failed_commands", []),
             "unproductive_commands": entry.get("unproductive_commands", []),
             "failed_command_verbs": entry.get("failed_command_verbs", []),
+            "action_space_context": entry.get("action_space_context", ""),
             "reset_cache": entry.get("reset_cache", False),
             "pending_carryover_commands": entry.get("pending_carryover_commands", []),
         }
@@ -1121,6 +1148,8 @@ class GameRunner:
         self._affordance_log_file.write(
             json.dumps(entry.get("active_situations", []), indent=2, ensure_ascii=False)
         )
+        self._affordance_log_file.write("\n\nlearned action space supplied to brainstorm:\n")
+        self._affordance_log_file.write(str(entry.get("action_space_context", "")))
         self._affordance_log_file.write("\n\nbrainstormed commands:\n")
         if ideas:
             for idx, idea in enumerate(ideas, 1):
@@ -1311,6 +1340,8 @@ class GameRunner:
         self._action_generation_log_file.write(str(generation.get("retrieved_experiences", "")))
         self._action_generation_log_file.write("\n\nstored situations context:\n")
         self._action_generation_log_file.write(str(generation.get("stored_situations_context", "[]")))
+        self._action_generation_log_file.write("\n\naction space context:\n")
+        self._action_generation_log_file.write(str(generation.get("action_space_context", "")))
         self._action_generation_log_file.write("\n\naffordance agenda sent to main LLM:\n")
         self._action_generation_log_file.write(
             str(generation.get("affordance_agenda")
