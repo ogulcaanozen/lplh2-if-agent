@@ -681,8 +681,14 @@ class LLMClient:
             )
             self.last_affordance_finish_reason = finish_reason
         else:
-            response = self._chat_aux_fallback(prompt, max_new_tokens=3072)
-            self.last_affordance_finish_reason = "llm_a_qwen14b"
+            response = self._chat_aux_fallback(
+                prompt,
+                max_new_tokens=config.LLM_BRAINSTORM_FALLBACK_MAX_NEW_TOKENS,
+            )
+            self.last_affordance_finish_reason = (
+                "llm_a_qwen14b"
+                f"; max_new_tokens={config.LLM_BRAINSTORM_FALLBACK_MAX_NEW_TOKENS}"
+            )
 
         self.last_affordance_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
