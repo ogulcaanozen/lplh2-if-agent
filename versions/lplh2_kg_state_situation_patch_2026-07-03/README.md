@@ -8,10 +8,13 @@ patch.
 
 New in this version:
 
-- non-cardinal KG action transitions such as `enter window -> Kitchen`,
+- LLM-gated non-cardinal KG action transitions such as
+  `enter window -> Kitchen`,
 - compact `possible_solution` text on stored situations,
 - gated Qwen-14B object/world-state extraction for durable states such as
   `window=open`, `rug=moved`, and `trap door=revealed, closed`.
+  The extractor cannot create new rooms; unknown location strings are clamped
+  to the current known room.
 
 It intentionally does not include later-room-title recovery, the dynamic
 situation manager, active planning, or BFS navigation experiments.

@@ -11,9 +11,11 @@ planning or BFS route forcing.
 
 ## Changes
 
-1. Non-cardinal transitions
+1. LLM-gated non-cardinal transitions
    - KG now stores confirmed non-direction transitions separately from cardinal
      exits.
+   - Code only detects the transition candidate. The auxiliary gate decides
+     whether it is a reusable action transition before KG records it.
    - Example:
 
 ```json
@@ -59,6 +61,10 @@ planning or BFS route forcing.
   ]
 }
 ```
+
+   - Object-state extraction is not allowed to create new rooms. If the
+     extractor names an unknown subarea or guessed location, KG stores the
+     update under the current known room instead.
 
 ## Intentionally Not Included
 

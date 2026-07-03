@@ -497,7 +497,19 @@ Make exactly these decisions:
    - Set false for pure navigation, parser errors, ordinary room descriptions,
      generic failed movement, and visible objects with no stated state.
 
-4. Stored situation detection
+4. KG action-transition decision
+   Decide whether Action Transition Candidate should be recorded in the KG as a
+   reusable non-cardinal travel/action transition. Do not invent transitions.
+   - Set "record": true only when the candidate clearly represents intentional,
+     reusable movement caused by the command itself, such as entering through an
+     object, climbing into a place, going through a passage/window/portal, or
+     otherwise using a non-cardinal action to reach the destination.
+   - Set "record": false when there is no candidate, the location changed due
+     to death/respawn/teleportation/punishment, a correction of a previously
+     wrong location, ordinary directional movement phrased in words, or an
+     action whose purpose was not travel.
+
+5. Stored situation detection
    - Set "run": true when the latest observation may contain a new unresolved
      future-return situation: darkness, danger, locked/nailed/blocked access,
      missing condition, inaccessible object/path, or a problem that may become
@@ -506,7 +518,7 @@ Make exactly these decisions:
      "can't go that way" boundaries, parser errors with no blocker, or already
      remembered situations.
 
-5. Affordance brainstorming
+6. Affordance brainstorming
    - Set "run": true when fresh local/inventory command ideas may help the next
      action selector: visible objects/features, inventory interactions, active
      situations that may now be addressable, recent failures needing alternate
@@ -557,6 +569,10 @@ Return JSON only between |start| and |end|:
     "reason": "short routing reason",
     "focus": ["optional", "short", "object", "targets"]
   }},
+  "kg_action_transition": {{
+    "record": true or false,
+    "reason": "short observation-based reason"
+  }},
   "stored_situation_detection": {{
     "run": true or false,
     "reason": "short reason"
@@ -588,6 +604,7 @@ Recent Failed Commands: {recent_failed_commands}
 Known Failed Commands Here: {known_failed_commands_here}
 Recent Command Outcomes Here: {recent_command_outcomes}
 Same-State Tried Commands: {same_state_tried_commands}
+Action Transition Candidate: {action_transition_candidate}
 Cached Affordance Ideas Available For This State: {cached_affordance_ideas_available}"""
 
 

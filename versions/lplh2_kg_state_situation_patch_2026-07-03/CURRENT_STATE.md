@@ -11,9 +11,10 @@ versions/lplh2_inv_gate_worldstate_selective_2026-07-02
 
 It keeps the main version's selective design and adds:
 
-- non-cardinal action transitions in KG,
+- LLM-gated non-cardinal action transitions in KG,
 - `possible_solution` on stored situations,
 - gated Qwen-14B object/world-state extraction.
+- object-state location clamping so the extractor cannot create fake rooms.
 
 It deliberately does not include:
 

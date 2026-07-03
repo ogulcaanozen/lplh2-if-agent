@@ -207,6 +207,10 @@ class LPLHAgent:
             "location_after_update": "",
             "confirmed_transition_type": "",
             "confirmed_transition": {},
+            "action_transition_candidate": {},
+            "action_transition_gate_decision": {},
+            "action_transition_applied": False,
+            "action_transition_status": "",
         }
         timer = time.perf_counter()
         try:
@@ -254,13 +258,8 @@ class LPLHAgent:
                     and self.kg_map.current_location
                     and self.kg_map.current_location != prev_location
                     and prev_lower not in self.kg_map._direction_set()):
-                self.kg_map.confirm_action_transition(
-                    from_location=prev_location,
-                    action=completed_action,
-                    to_location=self.kg_map.current_location,
-                )
-                kg_location_resolution["confirmed_transition_type"] = "action"
-                kg_location_resolution["confirmed_transition"] = {
+                kg_location_resolution["confirmed_transition_type"] = "action_candidate"
+                kg_location_resolution["action_transition_candidate"] = {
                     "from": prev_location,
                     "command": completed_action,
                     "to": self.kg_map.current_location,
@@ -297,6 +296,28 @@ class LPLHAgent:
         )
         record_timing("auxiliary_gate", timer)
         detail["modules"]["auxiliary_gate"] = auxiliary_gate
+        timer = time.perf_counter()
+        action_transition_result = self._apply_gate_action_transition(
+            auxiliary_gate=auxiliary_gate,
+        )
+        record_timing("kg_action_transition_gate", timer)
+        detail["modules"]["kg_action_transition"] = action_transition_result
+        kg_location_resolution["action_transition_gate_decision"] = (
+            action_transition_result.get("decision", {})
+        )
+        kg_location_resolution["action_transition_applied"] = bool(
+            action_transition_result.get("applied")
+        )
+        kg_location_resolution["action_transition_status"] = (
+            action_transition_result.get("status", "")
+        )
+        if action_transition_result.get("applied"):
+            kg_location_resolution["confirmed_transition_type"] = "action"
+            kg_location_resolution["confirmed_transition"] = (
+                action_transition_result.get("candidate", {})
+            )
+            detail["modules"]["kg_map"]["room_info"] = self.kg_map.get_current_room_info()
+            detail["modules"]["kg_map"]["kg_map_context"] = self.kg_map.to_prompt_string()
         timer = time.perf_counter()
         inventory_reconciliation = self._apply_gate_inventory_update(
             auxiliary_gate=auxiliary_gate,
@@ -1309,6 +1330,18 @@ class LPLHAgent:
                 + list(same_state_tried_commands or [])
             ),
         )
+        prev_lower = str(action or "").lower().strip()
+        action_transition_candidate = {}
+        if (action_valid is True
+                and prev_location
+                and location
+                and location != prev_location
+                and prev_lower not in self.kg_map._direction_set()):
+            action_transition_candidate = {
+                "from": prev_location,
+                "command": action,
+                "to": location,
+            }
 
         result = {
             "status": "not_run",
@@ -1328,6 +1361,7 @@ class LPLHAgent:
             "known_failed_commands_here": known_failed_here,
             "recent_command_outcomes": recent_command_outcomes,
             "same_state_tried_commands": same_state_tried_commands,
+            "action_transition_candidate": action_transition_candidate,
             "cached_affordance_ideas_available": len(cached_affordance_ideas),
             "prompt": "",
             "llm_raw_response": "",
@@ -1358,6 +1392,7 @@ class LPLHAgent:
                 known_failed_commands_here=known_failed_here,
                 recent_command_outcomes=recent_command_outcomes,
                 same_state_tried_commands=same_state_tried_commands,
+                action_transition_candidate=action_transition_candidate,
                 cached_affordance_ideas_available=len(cached_affordance_ideas),
             )
             result["prompt"] = self.llm.last_auxiliary_gate_prompt or ""
@@ -1559,6 +1594,34 @@ class LPLHAgent:
             result["finish_reason"] = self.llm.last_world_state_extraction_finish_reason or ""
         return result
 
+    def _apply_gate_action_transition(self, auxiliary_gate: dict) -> dict:
+        """Record a non-cardinal action transition only if the aux gate approves."""
+        decision = (auxiliary_gate or {}).get("decision", {})
+        transition_decision = decision.get("kg_action_transition", {})
+        candidate = (auxiliary_gate or {}).get("action_transition_candidate", {}) or {}
+        result = {
+            "status": "noop",
+            "candidate": candidate,
+            "decision": transition_decision,
+            "applied": False,
+            "reason": self._clean_text(transition_decision.get("reason", ""))
+            if isinstance(transition_decision, dict) else "",
+        }
+        if not candidate:
+            result["status"] = "no_candidate"
+            return result
+        if not isinstance(transition_decision, dict) or not transition_decision.get("record"):
+            result["status"] = "gate_rejected"
+            return result
+        self.kg_map.confirm_action_transition(
+            from_location=candidate.get("from", ""),
+            action=candidate.get("command", ""),
+            to_location=candidate.get("to", ""),
+        )
+        result["applied"] = True
+        result["status"] = "applied"
+        return result
+
     def _parse_world_state_update_response(self, response_body: str) -> tuple[dict, str]:
         body = str(response_body or "").strip()
         if not body:
@@ -1724,6 +1787,9 @@ class LPLHAgent:
                 ),
                 default_run=False,
             ),
+            "kg_action_transition": self._normalize_gate_transition_decision(
+                parsed.get("kg_action_transition", parsed.get("action_transition", {}))
+            ),
             "inventory_update": self._normalize_gate_inventory_update(
                 parsed.get("inventory_update", {}),
             ),
@@ -1823,6 +1889,16 @@ class LPLHAgent:
             ][:5],
         }
 
+    def _normalize_gate_transition_decision(self, value) -> dict:
+        if isinstance(value, bool):
+            return {"record": value, "reason": ""}
+        if not isinstance(value, dict):
+            return {"record": False, "reason": ""}
+        return {
+            "record": self._coerce_gate_bool(value.get("record", False), False),
+            "reason": self._clean_text(value.get("reason", "")),
+        }
+
     def _fallback_auxiliary_gate_decision(self) -> dict:
         return {
             "command_outcome": {
@@ -1869,6 +1945,10 @@ class LPLHAgent:
                 "run": False,
                 "reason": "Gate unavailable.",
                 "focus": [],
+            },
+            "kg_action_transition": {
+                "record": False,
+                "reason": "Gate unavailable.",
             },
             "inventory_update": {
                 "changed": False,

@@ -296,11 +296,10 @@ class KGMap:
             result["status"] = "no_world_state_change"
             return result
 
-        default_location = (
-            self._canonicalize_known_location(default_location or self.current_location or "")
-            or self.current_location
-            or "unknown"
-        )
+        default_location = self._known_location_or_default("", default_location)
+        if not default_location:
+            result["status"] = "no_known_location"
+            return result
 
         state_updates = self._as_list(update.get("object_state_updates", []))
         for item in state_updates:
@@ -308,9 +307,7 @@ class KGMap:
                 continue
             obj = self._clean_object_state_name(item.get("object", ""))
             state = self._clean_state_text(item.get("state", ""))
-            loc = self._canonicalize_known_location(
-                item.get("location") or default_location
-            ) or default_location
+            loc = self._known_location_or_default(item.get("location"), default_location)
             if not obj or not state:
                 continue
             self._replace_object_state_relation(loc, obj, state)
@@ -324,7 +321,10 @@ class KGMap:
             obj, loc = self._coerce_world_object_entry(raw, default_location)
             if not obj:
                 continue
-            loc = self._ensure_node(loc or default_location)
+            loc = self._known_location_or_default(loc, default_location)
+            if not loc:
+                continue
+            loc = self._ensure_node(loc)
             if self._should_store_room_object(loc, obj) and obj not in self.nodes[loc]["have"]:
                 self.nodes[loc]["have"].append(obj)
             result["new_objects"].append({"object": obj, "location": loc})
@@ -333,11 +333,11 @@ class KGMap:
             obj, loc = self._coerce_world_object_entry(raw, default_location)
             if not obj:
                 continue
-            if loc:
-                self._remove_room_object(obj, loc)
-            else:
-                self._remove_item_from_world(obj.lower())
-            result["removed_objects"].append({"object": obj, "location": loc or "all"})
+            loc = self._known_location_or_default(loc, default_location)
+            if not loc:
+                continue
+            self._remove_room_object(obj, loc)
+            result["removed_objects"].append({"object": obj, "location": loc})
 
         changed = bool(
             result["object_state_updates"]
@@ -523,9 +523,32 @@ class KGMap:
     def _coerce_world_object_entry(self, value, default_location: str) -> tuple[str, str]:
         if isinstance(value, dict):
             obj = self._clean_object_state_name(value.get("object", value.get("name", "")))
-            loc = self._canonicalize_known_location(value.get("location") or default_location)
+            loc = self._known_location_or_default(value.get("location"), default_location)
             return obj, loc
         return self._clean_object_state_name(value), default_location
+
+    def _known_location_or_default(self, location: str, default_location: str = None) -> str:
+        """Return a known room only; never let state extraction create rooms.
+
+        Location discovery belongs to relation extraction / room-title handling.
+        The world-state extractor may describe subareas such as "under rug" or
+        "dark upstairs", but those should be stored under the current known room
+        unless they already exist as real KG rooms.
+        """
+        default = self._clean_location_display(default_location or self.current_location or "")
+        default_key = self._location_key(default)
+        if default_key in self.location_aliases:
+            default = self.location_aliases[default_key]
+        elif self.current_location and self._location_key(self.current_location) in self.location_aliases:
+            default = self.location_aliases[self._location_key(self.current_location)]
+        else:
+            default = ""
+
+        candidate = self._clean_location_display(location)
+        candidate_key = self._location_key(candidate)
+        if candidate_key in self.location_aliases:
+            return self.location_aliases[candidate_key]
+        return default
 
     def _clean_object_state_name(self, value: str) -> str:
         text = re.sub(r"\s+", " ", str(value or "")).strip()
