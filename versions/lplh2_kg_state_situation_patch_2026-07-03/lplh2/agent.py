@@ -296,6 +296,30 @@ class LPLHAgent:
         )
         record_timing("auxiliary_gate", timer)
         detail["modules"]["auxiliary_gate"] = auxiliary_gate
+        command_outcome = auxiliary_gate.get("decision", {}).get("command_outcome", {})
+        if command_outcome.get("status") == "accepted" and action_valid is not True:
+            raw_action_valid = action_valid
+            action_valid = True
+            action_space_detail = detail["modules"].get("action_space", {})
+            action_space_detail["fm_prev_action_valid"] = raw_action_valid
+            action_space_detail["prev_action_valid"] = True
+            action_space_detail["validity_override"] = {
+                "source": "auxiliary_gate_command_outcome",
+                "status": "accepted",
+                "reason": command_outcome.get("reason", ""),
+            }
+            if action_split is None:
+                try:
+                    split = self.fm.split_action(completed_action)
+                    action_split = split
+                    self.action_space.store_action(split["verb"], split["objects"])
+                    action_space_detail["action_split"] = action_split
+                    action_space_detail["total_verbs"] = len(self.action_space.verbs)
+                    action_space_detail["total_actions_learned"] = self.action_space.num_actions()
+                    action_space_detail["all_verbs"] = list(self.action_space.verbs.keys())
+                except Exception as e:
+                    action_space_detail["validity_override_split_error"] = str(e)
+
         timer = time.perf_counter()
         action_transition_result = self._apply_gate_action_transition(
             auxiliary_gate=auxiliary_gate,
@@ -983,6 +1007,9 @@ class LPLHAgent:
         initial_generation = self.step_count == 0 and self.prev_action is None
         room_info = self.kg_map.get_current_room_info()
         current_objects = room_info.get("objects", [])
+        current_objects_with_state = self._visible_objects_with_state_for_location(
+            self.kg_map.current_location or "unknown"
+        )
         current_state_snapshot = self._repetition_state_snapshot(
             location=self.kg_map.current_location or "unknown",
             observation=observation,
@@ -1016,6 +1043,7 @@ class LPLHAgent:
         affordance_result = self._brainstorm_affordances(
             observation=observation,
             current_objects=current_objects,
+            current_objects_with_state=current_objects_with_state,
             stored_situations=self.situation_memory.active_situations(),
             action_space_context=action_space_context,
             known_failed_here=known_failed_here,
@@ -1092,6 +1120,7 @@ class LPLHAgent:
         return command, generation
 
     def _brainstorm_affordances(self, observation: str, current_objects: list,
+                                current_objects_with_state: list,
                                 stored_situations: list,
                                 action_space_context: str,
                                 known_failed_here: str,
@@ -1140,7 +1169,8 @@ class LPLHAgent:
             "status": "not_run",
             "location": self.kg_map.current_location or "unknown",
             "observation": observation,
-            "visible_objects": list(current_objects or []),
+            "visible_objects": list(current_objects_with_state or current_objects or []),
+            "visible_object_names": list(current_objects or []),
             "inventory": list(self.kg_map.inventory),
             "recent_failed_commands": list(self.recent_failed_actions),
             "known_failed_commands_here": known_failed_here,
@@ -1412,6 +1442,7 @@ class LPLHAgent:
                     parsed=parsed,
                     action=action,
                     action_valid=action_valid,
+                    observation=observation,
                 )
                 result["status"] = "routed"
         except Exception as e:
@@ -1717,7 +1748,7 @@ class LPLHAgent:
         return parsed, ""
 
     def _normalize_auxiliary_gate_decision(self, parsed: dict, action: str,
-                                           action_valid) -> dict:
+                                           action_valid, observation: str = "") -> dict:
         command_outcome = self._normalize_command_outcome(
             parsed.get("command_outcome", {}),
             action_valid=action_valid,
@@ -1754,6 +1785,19 @@ class LPLHAgent:
             parsed.get("situation_detection", {}),
         )
         affordance_raw = parsed.get("affordance_brainstorming", {})
+        inventory_route = self._normalize_gate_run_decision(
+            parsed.get(
+                "inventory_reconciliation",
+                parsed.get("inventory_update", {}),
+            ),
+            default_run=False,
+        )
+        inventory_route = self._repair_inventory_route_if_needed(
+            route=inventory_route,
+            action=action,
+            command_outcome=command_outcome,
+            observation=observation,
+        )
         return {
             "command_outcome": command_outcome,
             "environmental_change": {
@@ -1773,13 +1817,7 @@ class LPLHAgent:
                 affordance_raw,
                 default_run=True,
             ),
-            "inventory_reconciliation": self._normalize_gate_run_decision(
-                parsed.get(
-                    "inventory_reconciliation",
-                    parsed.get("inventory_update", {}),
-                ),
-                default_run=False,
-            ),
+            "inventory_reconciliation": inventory_route,
             "world_state_extraction": self._normalize_gate_run_decision(
                 parsed.get(
                     "world_state_extraction",
@@ -1794,6 +1832,66 @@ class LPLHAgent:
                 parsed.get("inventory_update", {}),
             ),
         }
+
+    def _repair_inventory_route_if_needed(self, route: dict, action: str,
+                                          command_outcome: dict,
+                                          observation: str = "") -> dict:
+        """Fix self-contradictory gate routing for explicit inventory evidence."""
+        if not isinstance(route, dict):
+            route = {}
+        if route.get("run"):
+            return route
+
+        outcome_status = str(command_outcome.get("status", "")).strip().lower()
+        evidence = " ".join([
+            str(action or ""),
+            str(observation or ""),
+            str(command_outcome.get("reason", "") or ""),
+        ]).lower()
+
+        accepted_inventory_markers = (
+            "taken", "picked up", "acquired", "now carried", "already carried",
+            "dropped", "eaten", "eats", "drunk", "drank", "given away",
+            "gave", "lost", "stolen", "no longer carried",
+        )
+        repair_markers = (
+            "you don't have that", "you do not have that",
+            "already have that", "already have it",
+        )
+        should_repair = (
+            outcome_status == "accepted"
+            and any(marker in evidence for marker in accepted_inventory_markers)
+        ) or any(marker in evidence for marker in repair_markers)
+
+        if not should_repair:
+            return route
+
+        repaired = dict(route)
+        repaired["run"] = True
+        repaired["reason"] = (
+            "Consistency repair: command outcome/observation contains explicit "
+            "inventory evidence, so inventory reconciliation should run."
+        )
+        if not repaired.get("focus"):
+            repaired["focus"] = self._inventory_focus_from_action(action)
+        repaired["consistency_repair"] = True
+        return repaired
+
+    def _inventory_focus_from_action(self, action: str) -> list[str]:
+        tokens = re.findall(r"[a-z0-9']+", str(action or "").lower())
+        if len(tokens) < 2:
+            return []
+        stop_words = {
+            "to", "at", "with", "from", "into", "in", "on", "onto",
+            "through", "using", "inside", "under", "over",
+        }
+        object_words = []
+        for token in tokens[1:]:
+            if token in stop_words:
+                break
+            object_words.append(token)
+        focus = " ".join(object_words).strip()
+        return [focus] if focus else []
 
     def _normalize_command_outcome(self, value, action_valid) -> dict:
         default_status = "accepted" if action_valid is True else "rejected"
@@ -2134,6 +2232,12 @@ class LPLHAgent:
             return list(self.kg_map.nodes[location].get("have", []))
         room_info = self.kg_map.get_current_room_info()
         return list(room_info.get("objects", []))
+
+    def _visible_objects_with_state_for_location(self, location: str) -> list:
+        if location and location in self.kg_map.nodes:
+            return self.kg_map._visible_objects_with_state(location)
+        current_state = self.kg_map.to_clean_dict().get("current_room_state", {})
+        return list(current_state.get("visible_objects", []))
 
     def _fallback_failure_reason(self, observation: str) -> str:
         obs = re.sub(r"\s+", " ", str(observation or "")).strip()

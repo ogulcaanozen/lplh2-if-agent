@@ -479,11 +479,17 @@ Make exactly these decisions:
    - Set "run": true when the observation gives concrete evidence that carried
      inventory changed or that the current inventory record needs repair.
    - Examples: an inventory listing appears; the object from Previous Action is
-     taken, already carried, dropped, eaten, drunk, given away, lost by name, or
-     explicitly no longer carried.
-   - Set false for visible room objects, vague theft/loss hints that do not name
-     a concrete item, parser errors unrelated to inventory, and ordinary room
-     descriptions.
+      taken, already carried, dropped, eaten, drunk, given away, lost by name, or
+      explicitly no longer carried.
+    - If Previous Action names an object and the observation is a short success
+      confirmation such as "Taken." or "Dropped.", set run=true and put that
+      object in focus.
+    - If the observation says "You don't have that!" while the current inventory
+      record still lists the object from Previous Action, set run=true because
+      the carried-items record likely needs repair.
+    - Set false for visible room objects, vague theft/loss hints that do not name
+      a concrete item, parser errors unrelated to inventory, and ordinary room
+      descriptions.
 
 3. Object/world-state extraction routing
    Decide whether a dedicated object-state extraction pass should run. Do not
@@ -682,6 +688,36 @@ Output:
   "items_added": ["pile of leaves"],
   "items_removed": [],
   "reason": "The game explicitly says the player already has the object from the command, so the inventory record should be repaired."
+}}
+|end|
+
+Previous Action: drop lunch
+Observation After Action: Dropped.
+Current Inventory: ["leaflet", "lunch", "lantern"]
+Output:
+|start|
+{{
+  "changed": true,
+  "authoritative": false,
+  "items_now_carried": [],
+  "items_added": [],
+  "items_removed": ["lunch"],
+  "reason": "The drop command produced Dropped, so the object named in the command is no longer carried."
+}}
+|end|
+
+Previous Action: feed lunch to troll
+Observation After Action: You don't have that!
+Current Inventory: ["leaflet", "lunch", "lantern"]
+Output:
+|start|
+{{
+  "changed": true,
+  "authoritative": false,
+  "items_now_carried": [],
+  "items_added": [],
+  "items_removed": ["lunch"],
+  "reason": "The game says the player does not have the object from the command, so the inventory record should be repaired."
 }}
 |end|
 
@@ -1180,6 +1216,7 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 - Use simple canonical commands that IF parsers usually understand.
 - You may suggest useful verbs that are not in the learned action space.
 - Do suggest interactions for newly observed objects even if no stored situation exists. Example: a visible rug can suggest "move rug", "lift rug", and "look under rug".
+- Use object state when proposing commands. Avoid commands whose main purpose is to create a state that the object already has.
 - Keep commands short and directly executable: "take lantern", "turn on lantern", "move rug", "look under rug".
 - Do not repeat an exact recent failed command.
 - Avoid exact commands listed in Known Failed Commands Here unless the current state has meaningfully changed.
