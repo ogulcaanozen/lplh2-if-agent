@@ -51,3 +51,6 @@ and agenda lifecycle visible to the brainstormer and main action LLM.
   also ends on that step.
 - Removed an unused experience-rendering config flag that was not wired to any
   behavior.
+- Added `attempt_ledger_log.txt` and expanded `affordance_brainstorm_log.txt`
+  so the new ledger, command-history, cache-status, and agenda annotations are
+  easy to review without digging through `steplog.json`.

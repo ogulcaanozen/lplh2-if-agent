@@ -53,6 +53,7 @@ Each experiment folder should include:
 - `affordance_brainstorm_log.txt`
 - `action_failure_memory_log.txt`
 - `action_generation_log.txt`
+- `attempt_ledger_log.txt`
 - `auxiliary_gate_log.txt`
 - `kg_location_log.txt`
 - `module_timing_log.txt`
@@ -60,3 +61,5 @@ Each experiment folder should include:
 
 The most relevant file for this patch is `action_generation_log.txt`, which
 now includes command history in the room and the main LLM repeat self-check.
+Use `attempt_ledger_log.txt` to audit the factual command counts and
+`affordance_brainstorm_log.txt` to audit agenda carryover/cache behavior.
