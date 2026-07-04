@@ -42,3 +42,12 @@ and agenda lifecycle visible to the brainstormer and main action LLM.
 - Deterministic bans on repeated commands.
 - Active situation planning or BFS navigation execution.
 - Dynamic situation manager reintroduction.
+
+## Post-Review Fixes
+
+- Room visit counts now increment only on actual location changes; repeated
+  commands inside the same room no longer inflate the visit count.
+- Positive score summaries are always tagged as `achievement`, even if the game
+  also ends on that step.
+- Removed an unused experience-rendering config flag that was not wired to any
+  behavior.

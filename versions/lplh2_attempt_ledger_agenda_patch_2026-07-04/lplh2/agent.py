@@ -433,8 +433,8 @@ class LPLHAgent:
                 experience_summary = exp_summary
                 score_summary_prompt = self.llm.last_summary_prompt or ""
                 score_experience_kind = (
-                    "death_warning" if done or reward_change < 0
-                    else "achievement" if reward_change > 0
+                    "achievement" if reward_change > 0
+                    else "death_warning" if reward_change < 0
                     else "terminal"
                 )
                 self.experience_lib.store_experience(
@@ -805,10 +805,12 @@ class LPLHAgent:
         record_timing("state_repetition_memory", timer)
 
         timer = time.perf_counter()
-        room_visit_record = self.attempt_ledger.record_room_visit(
-            self.kg_map.current_location or "unknown",
-            step=self.step_count,
-        )
+        room_visit_record = None
+        if location_changed_for_affordance:
+            room_visit_record = self.attempt_ledger.record_room_visit(
+                self.kg_map.current_location or "unknown",
+                step=self.step_count,
+            )
         attempt_ledger_detail = self.attempt_ledger.record_step(
             location=source_memory_location,
             command=completed_action,
@@ -2359,6 +2361,8 @@ class LPLHAgent:
                 header_bits.append("use_as=successful_action_memory_not_loop_target")
             elif kind == "death_warning":
                 header_bits.append("use_as=avoid_repeating_death")
+            elif kind == "terminal":
+                header_bits.append("use_as=terminal_outcome_memory")
             elif kind == "route":
                 header_bits.append("use_as=navigation_fact")
             elif kind == "syntax_lesson":

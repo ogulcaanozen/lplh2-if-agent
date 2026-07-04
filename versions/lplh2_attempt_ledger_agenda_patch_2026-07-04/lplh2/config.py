@@ -43,9 +43,6 @@ LLM_BRAINSTORM_FALLBACK_MAX_NEW_TOKENS = int(
 
 # Experience library settings
 EXPERIENCE_TOP_K = 3
-EXPERIENCE_RENDER_DIVERSITY = os.getenv(
-    "LPLH_EXPERIENCE_RENDER_DIVERSITY", "true"
-).lower() in ("1", "true", "yes", "on")
 CHROMA_COLLECTION = "lplh_experiences"
 CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "chroma_db")
 EXPERIENCE_INDEX_DIR = os.getenv(
