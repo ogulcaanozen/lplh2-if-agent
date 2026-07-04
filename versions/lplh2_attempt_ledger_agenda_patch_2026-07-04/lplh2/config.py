@@ -14,6 +14,7 @@ LLM_PROVIDER = os.getenv("LPLH_LLM_PROVIDER", "ollama")
 # override this with LPLH_LLM_PROVIDER=huggingface and a Qwen2.5 model name.
 LLM_MODEL = os.getenv("LPLH_LLM_MODEL", "qwen3:8b")
 LLM_TEMPERATURE = 0.6  # paper
+LLM_REASONING_EFFORT = os.getenv("LPLH_LLM_REASONING_EFFORT", "").strip()
 
 # fm settings: action validation / relation extraction / action splitting
 FM_MODEL_PATH = os.getenv("LPLH_FM_PATH", "fm_adapter_v3_round3/")
@@ -29,11 +30,15 @@ PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "true").lower() in
 # Set a model name such as "o3-mini" or "gpt-4.1" to use OpenAI for aux calls. Set ""
 # to run aux/summarization calls on LLM_a.
 LLM_ES_MODEL = os.getenv("LPLH_LLM_ES_MODEL", "")
+LLM_AUX_FALLBACK_LABEL = os.getenv("LPLH_LLM_AUX_FALLBACK_LABEL", "LLM_a fallback")
 
 # Optional dedicated model for affordance brainstorming. When set, only the
 # brainstormer uses this OpenAI model; all other auxiliary modules keep using
 # LLM_ES_MODEL or the LLM_a fallback above.
 LLM_BRAINSTORM_MODEL = os.getenv("LPLH_BRAINSTORM_MODEL", "")
+LLM_BRAINSTORM_FALLBACK_LABEL = os.getenv(
+    "LPLH_BRAINSTORM_FALLBACK_LABEL", LLM_AUX_FALLBACK_LABEL
+)
 LLM_BRAINSTORM_REASONING_EFFORT = os.getenv(
     "LPLH_BRAINSTORM_REASONING_EFFORT", "low"
 ).strip()

@@ -134,9 +134,18 @@ class GameRunner:
             kg_location_log_path, "w", encoding="utf-8", buffering=1
         )
         self._timing_log_file = open(timing_log_path, "w", encoding="utf-8", buffering=1)
-        aux_model = config.LLM_ES_MODEL or "LLM_a fallback"
-        brainstorm_model = config.LLM_BRAINSTORM_MODEL or aux_model
+        aux_model = config.LLM_ES_MODEL or config.LLM_AUX_FALLBACK_LABEL
+        brainstorm_model = config.LLM_BRAINSTORM_MODEL or config.LLM_BRAINSTORM_FALLBACK_LABEL
         brainstorm_model_lower = (config.LLM_BRAINSTORM_MODEL or "").lower()
+        main_effort = (
+            f" (reasoning_effort={config.LLM_REASONING_EFFORT})"
+            if (
+                config.LLM_PROVIDER == "openai"
+                and (config.LLM_MODEL or "").lower().startswith(("o1", "o3", "o4"))
+                and config.LLM_REASONING_EFFORT
+            )
+            else ""
+        )
         brainstorm_effort = (
             f" (reasoning_effort={config.LLM_BRAINSTORM_REASONING_EFFORT})"
             if (
@@ -149,7 +158,7 @@ class GameRunner:
         self._log_file.write(f"LPLH Run Log — {game_name}\n")
         self._log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
-            f"LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL} | "
+            f"LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL}{main_effort} | "
             f"LLM_aux/es: {aux_model} | "
             f"LLM_brainstorm: {brainstorm_model}{brainstorm_effort} | "
             f"fm: {config.FM_BASE_MODEL} + {config.FM_MODEL_PATH}\n"
@@ -228,7 +237,7 @@ class GameRunner:
         print(f"\n{'='*70}")
         print(f"  LPLH Framework - Playing: {game_name}")
         print(f"  Epochs: {self.num_epochs}, Steps/epoch: {self.max_steps}")
-        print(f"  LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL}")
+        print(f"  LLM_a: {config.LLM_PROVIDER}/{config.LLM_MODEL}{main_effort}")
         print(f"  LLM_aux/es: {aux_model}")
         print(f"  LLM_brainstorm: {brainstorm_model}{brainstorm_effort}")
         print(f"  fm : {config.FM_BASE_MODEL} + {config.FM_MODEL_PATH}")

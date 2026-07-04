@@ -243,14 +243,23 @@ class LLMClient:
         kwargs = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
         }
+        if self._openai_model_supports_reasoning_effort():
+            effort = config.LLM_REASONING_EFFORT
+            if effort:
+                kwargs["reasoning_effort"] = effort
+        else:
+            kwargs["temperature"] = temperature
         if max_new_tokens:
             kwargs["max_completion_tokens"] = int(max_new_tokens)
         response = self._openai.chat.completions.create(
             **kwargs,
         )
         return response.choices[0].message.content
+
+    def _openai_model_supports_reasoning_effort(self) -> bool:
+        model_name = (self.model or "").lower()
+        return model_name.startswith(("o1", "o3", "o4"))
 
     def _chat_aux_fallback(self, prompt: str, max_new_tokens: int) -> str:
         """Run auxiliary work on LLM_a with deterministic decoding."""
