@@ -8,6 +8,7 @@ import os
 import logging
 import hashlib
 import json
+import numbers
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -80,16 +81,44 @@ class ExperienceLib:
         try:
             self._init_chroma()
             doc_id = hashlib.md5(experience_text.encode()).hexdigest()
-            
+            chroma_metadata = self._sanitize_chroma_metadata(metadata or {})
+
             self._collection.add(
                 documents=[experience_text],
                 ids=[doc_id],
-                metadatas=[metadata or {}],
+                metadatas=[chroma_metadata],
             )
             logger.info(f"Stored experience (total: {len(self.experiences)})")
         except Exception as e:
             logger.warning(f"Failed to store experience in ChromaDB: {e}")
             # Still keep in memory list
+
+    @staticmethod
+    def _sanitize_chroma_metadata(metadata: dict) -> dict:
+        """Return metadata in Chroma's scalar-only format.
+
+        Chroma accepts only str/int/float/bool metadata values. The agent's
+        internal metadata may contain None, lists, dicts, or NumPy-style scalar
+        values from game/runtime APIs, so normalize before vector storage.
+        """
+        clean = {}
+        for key, value in (metadata or {}).items():
+            if value is None:
+                continue
+            key = str(key)
+            if isinstance(value, bool):
+                clean[key] = value
+            elif isinstance(value, numbers.Integral):
+                clean[key] = int(value)
+            elif isinstance(value, numbers.Real):
+                clean[key] = float(value)
+            elif isinstance(value, str):
+                clean[key] = value
+            elif isinstance(value, (list, tuple, dict)):
+                clean[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                clean[key] = str(value)
+        return clean
 
     def neutral_event_seen(self, event_key: str) -> bool:
         """True if a neutral-state event has already been summarized.
