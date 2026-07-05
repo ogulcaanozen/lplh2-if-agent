@@ -503,6 +503,9 @@ class LPLHAgent:
                         score_metadata["event_key"] = score_event_key
                     if reward_change < 0:
                         score_metadata["fatal_action"] = completed_action
+                        score_metadata.update(
+                            self._parse_loss_summary_fields(exp_summary)
+                        )
                     self.experience_lib.store_experience(
                         experience_text=exp_summary,
                         metadata=score_metadata,
@@ -2547,6 +2550,12 @@ class LPLHAgent:
                     header_bits.append(f"score_now={self.total_score}")
             elif kind == "death_warning":
                 header_bits.append("use_as=avoid_repeating_death")
+                assessment = metadata.get("fatal_action_assessment", "")
+                retry_condition = metadata.get("retry_condition", "")
+                if assessment:
+                    header_bits.append(f"fatal_action_assessment={assessment}")
+                if retry_condition:
+                    header_bits.append(f"retry_condition={retry_condition}")
             elif kind == "terminal":
                 header_bits.append("use_as=terminal_outcome_memory")
             elif kind == "route":
@@ -2942,6 +2951,33 @@ class LPLHAgent:
 
         result["active_situations_after"] = self.situation_memory.active_situations()
         return result
+
+    def _parse_loss_summary_fields(self, summary: str) -> dict:
+        """Extract advisory loss fields for retrieval headers.
+
+        The source of truth remains the LLM-written summary text. These fields
+        only make the most important death lesson more visible in retrieval.
+        """
+        text = str(summary or "").strip()
+        if not text:
+            return {}
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except Exception:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        output = {}
+        assessment = str(parsed.get("fatal_action_assessment", "") or "").strip()
+        retry_condition = str(parsed.get("retry_condition", "") or "").strip()
+        if assessment:
+            output["fatal_action_assessment"] = assessment
+        if retry_condition:
+            output["retry_condition"] = retry_condition
+        return output
 
     def _neutral_event_key(self, trigger: str, action: str, observation: str,
                            location: str, prev_location: str = None,

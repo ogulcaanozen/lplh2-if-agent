@@ -144,14 +144,14 @@ LOSS_EXPERIENCE_SUMMARIZATION_PROMPT = """<START OF INSTRUCTIONS>
 You are summarizing a score LOSS, usually a death, in a text-based game so a future playthrough can avoid repeating the same mistake. Use only the provided history and attempt ledger. Quote before you conclude.
 
 Work in this order:
-1. FINAL EXCHANGES: copy the last 2-3 action/observation pairs verbatim, ending with the fatal one.
+1. FINAL EXCHANGES: copy exactly the last 3 action/observation pairs verbatim, ending with the fatal one. If fewer than 3 pairs are available, copy all available pairs.
 2. PROXIMATE CAUSE: one sentence naming what state or condition directly led to the loss, supported only by the quoted text.
-3. CONFIRMED MECHANICS: list game rules or hazards the observations stated outright. If the attempt ledger says the fatal command produced different outcomes across attempts, include that outcomes vary between attempts. Do not invent weaknesses, tools, routes, or solutions that were never observed.
+3. CONFIRMED MECHANICS: list game rules or hazards the observations stated outright. Each confirmed mechanic must be traceable to a specific quoted observation or the attempt ledger; if it requires inference about causes, move it to untested_idea. If the attempt ledger says the fatal command produced different outcomes across attempts, include that outcomes vary between attempts. Do not invent weaknesses, tools, routes, or solutions that were never observed.
 4. FATAL ACTION ASSESSMENT: choose exactly one:
    - "wrong_in_that_state": the action may be reasonable generally, but was taken in a bad state or condition.
    - "wrong_in_itself": the action itself appears dangerous here regardless of state.
    - "unlucky_randomness": the action was reasonable and outcomes vary, so retrying under similar healthy/safe conditions may be legitimate.
-5. RETRY CONDITION: one sentence explaining when repeating the fatal action would be reasonable, or "never" if it should not be retried.
+5. RETRY CONDITION: one sentence explaining when repeating the fatal action would be reasonable, or "never" if it should not be retried. This must be consistent with fatal_action_assessment: for "wrong_in_that_state", describe the acceptable state instead of "never"; reserve "never" for "wrong_in_itself"; for "unlucky_randomness", say retrying in a healthy/safe state is reasonable.
 6. UNTESTED IDEA: at most one speculative suggestion, clearly marked as untested. Never present it as a confirmed solution.
 
 Return between |start| and |end|:
