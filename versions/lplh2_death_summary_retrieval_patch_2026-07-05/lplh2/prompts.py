@@ -151,7 +151,9 @@ Work in this order:
    - "wrong_in_that_state": the action may be reasonable generally, but was taken in a bad state or condition.
    - "wrong_in_itself": the action itself appears dangerous here regardless of state.
    - "unlucky_randomness": the action was reasonable and outcomes vary, so retrying under similar healthy/safe conditions may be legitimate.
+   If the quoted observations show the player was not impaired or warned at the fatal moment, and the loss came from a variable combat or hazard outcome, prefer "unlucky_randomness" over inventing a bad state.
 5. RETRY CONDITION: one sentence explaining when repeating the fatal action would be reasonable, or "never" if it should not be retried. This must be consistent with fatal_action_assessment: for "wrong_in_that_state", describe the acceptable state instead of "never"; reserve "never" for "wrong_in_itself"; for "unlucky_randomness", say retrying in a healthy/safe state is reasonable.
+   retry_condition may only reference states or conditions that appear in the quoted history or the attempt ledger, such as "fully recovered"; never reference hypothetical conditions that were not observed, such as "after weakening the enemy".
 6. UNTESTED IDEA: at most one speculative suggestion, clearly marked as untested. Never present it as a confirmed solution.
 
 Return between |start| and |end|:
