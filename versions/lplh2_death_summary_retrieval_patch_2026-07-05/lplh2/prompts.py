@@ -147,14 +147,13 @@ Work in this order:
 1. FINAL EXCHANGES: copy exactly the last 3 action/observation pairs verbatim, ending with the fatal one. If fewer than 3 pairs are available, copy all available pairs.
 2. PROXIMATE CAUSE: one sentence naming what state or condition directly led to the loss, supported only by the quoted text.
 3. CONFIRMED MECHANICS: list game rules or hazards the observations stated outright. Each confirmed mechanic must be traceable to a specific quoted observation or the attempt ledger; if it requires inference about causes, move it to untested_idea. If the attempt ledger says the fatal command produced different outcomes across attempts, include that outcomes vary between attempts. Do not invent weaknesses, tools, routes, or solutions that were never observed.
-4. FATAL ACTION ASSESSMENT: choose exactly one:
-   - "wrong_in_that_state": the action may be reasonable generally, but was taken in a bad state or condition.
-   - "wrong_in_itself": the action itself appears dangerous here regardless of state.
-   - "unlucky_randomness": the action was reasonable and outcomes vary, so retrying under similar healthy/safe conditions may be legitimate.
-   If the quoted observations show the player was not impaired or warned at the fatal moment, and the loss came from a variable combat or hazard outcome, prefer "unlucky_randomness" over inventing a bad state.
-5. RETRY CONDITION: one sentence explaining when repeating the fatal action would be reasonable, or "never" if it should not be retried. This must be consistent with fatal_action_assessment: for "wrong_in_that_state", describe the acceptable state instead of "never"; reserve "never" for "wrong_in_itself"; for "unlucky_randomness", say retrying in a healthy/safe state is reasonable.
-   retry_condition may only reference states or conditions that appear in the quoted history or the attempt ledger, such as "fully recovered"; never reference hypothetical conditions that were not observed, such as "after weakening the enemy".
-6. UNTESTED IDEA: at most one speculative suggestion, clearly marked as untested. Never present it as a confirmed solution.
+4. IMPAIRMENT EVIDENCE: first fill impairment_evidence by searching the final_exchanges for a verbatim quote showing the player was wounded, stunned, recovering, weakened, trapped, warned, or otherwise in a bad state before the fatal action. If there is no such quote, write exactly "none".
+5. FATAL ACTION ASSESSMENT: choose exactly one using this decision procedure:
+   - If impairment_evidence is a real quote, choose "wrong_in_that_state". retry_condition must negate that quoted impairment, such as "when fully recovered" or "when not wounded".
+   - If impairment_evidence is "none" and outcomes vary according to the attempt ledger or observations, choose "unlucky_randomness". retry_condition must be "retrying in a healthy/safe state is reasonable".
+   - Choose "wrong_in_itself" only when the quoted observations state the action itself is inherently fatal, forbidden, or impossible regardless of state. retry_condition must be "never".
+6. RETRY CONDITION: one sentence explaining when repeating the fatal action would be reasonable, or "never" if it should not be retried. It may only reference states or conditions that appear in impairment_evidence, the quoted history, or the attempt ledger. Never reference hypothetical conditions that were not observed, such as "after weakening the enemy" or "after distracting the enemy".
+7. UNTESTED IDEA: at most one speculative suggestion, clearly marked as untested. Never present it as a confirmed solution.
 
 Return between |start| and |end|:
 |start|
@@ -166,6 +165,7 @@ Return between |start| and |end|:
   ],
   "proximate_cause": "...",
   "confirmed_mechanics": ["..."],
+  "impairment_evidence": "verbatim quote or none",
   "fatal_action_assessment": "wrong_in_that_state | wrong_in_itself | unlucky_randomness",
   "retry_condition": "...",
   "untested_idea": "..."

@@ -2550,8 +2550,11 @@ class LPLHAgent:
                     header_bits.append(f"score_now={self.total_score}")
             elif kind == "death_warning":
                 header_bits.append("use_as=avoid_repeating_death")
+                impairment = metadata.get("impairment_evidence", "")
                 assessment = metadata.get("fatal_action_assessment", "")
                 retry_condition = metadata.get("retry_condition", "")
+                if impairment:
+                    header_bits.append(f"impairment_evidence={impairment}")
                 if assessment:
                     header_bits.append(f"fatal_action_assessment={assessment}")
                 if retry_condition:
@@ -2971,8 +2974,11 @@ class LPLHAgent:
         if not isinstance(parsed, dict):
             return {}
         output = {}
+        impairment = str(parsed.get("impairment_evidence", "") or "").strip()
         assessment = str(parsed.get("fatal_action_assessment", "") or "").strip()
         retry_condition = str(parsed.get("retry_condition", "") or "").strip()
+        if impairment:
+            output["impairment_evidence"] = impairment
         if assessment:
             output["fatal_action_assessment"] = assessment
         if retry_condition:
