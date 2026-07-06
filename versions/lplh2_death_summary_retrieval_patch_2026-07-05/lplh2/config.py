@@ -21,8 +21,9 @@ FM_MODEL_PATH = os.getenv("LPLH_FM_PATH", "fm_adapter_v3_round3/")
 FM_BASE_MODEL = os.getenv("LPLH_FM_BASE", "Qwen/Qwen2.5-1.5B-Instruct")
 FM_TEMPERATURE = float(os.getenv("LPLH_FM_TEMPERATURE", "0.1"))
 
-# Keep learned valid actions across epochs unless explicitly disabled.
-PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "true").lower() in (
+# Compatibility flag for old notebooks/logs. New epoch resets keep only the
+# Experience Library; action space is learned fresh inside each epoch.
+PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "false").lower() in (
     "1", "true", "yes", "on"
 )
 

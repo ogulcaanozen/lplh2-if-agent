@@ -80,20 +80,19 @@ class LPLHAgent:
         """Reset the agent for a new epoch.
 
         Args:
-            keep_experiences: If True, keep learning state across epochs.
-                            Experience Library always persists in this mode;
-                            Action Space also persists when configured.
-                            If False, perform a full reset.
+            keep_experiences: If True, keep only the Experience Library across
+                            epochs. All live world/action bookkeeping is reset
+                            because a new epoch starts from a fresh game world.
+                            If False, also clear the Experience Library.
         """
         self.kg_map.reset()
-        if not keep_experiences or not config.PERSIST_ACTION_SPACE:
-            self.action_space.reset()
+        self.action_space.reset()
+        self.situation_memory.reset()
+        self.failed_action_memory.reset()
+        self.state_action_memory.reset()
+        self.attempt_ledger.reset()
         if not keep_experiences:
             self.experience_lib.reset()
-            self.situation_memory.reset()
-            self.failed_action_memory.reset()
-            self.state_action_memory.reset()
-            self.attempt_ledger.reset()
         self.affordance_brainstormer.reset()
         self.history = []
         self.prev_action = None
