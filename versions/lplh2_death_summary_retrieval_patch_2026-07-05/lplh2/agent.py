@@ -22,7 +22,7 @@ from .action_space import ActionSpace
 from .experience_lib import ExperienceLib
 from .opportunity_module import SituationMemory
 from .affordance_brainstormer import AffordanceBrainstormer
-from .action_memory import StateScopedActionMemory
+from .action_memory import FailedActionMemory, StateScopedActionMemory
 from .attempt_ledger import AttemptLedger
 from .command_keys import normalize_command_key, normalize_location_key
 from .llm_client import LLMClient
@@ -54,6 +54,7 @@ class LPLHAgent:
         self.experience_lib = ExperienceLib()
         self.situation_memory = SituationMemory()
         self.affordance_brainstormer = AffordanceBrainstormer()
+        self.failed_action_memory = FailedActionMemory()
         self.state_action_memory = StateScopedActionMemory()
         self.attempt_ledger = AttemptLedger()
 
@@ -87,6 +88,7 @@ class LPLHAgent:
         self.kg_map.reset()
         self.action_space.reset()
         self.situation_memory.reset()
+        self.failed_action_memory.reset()
         self.state_action_memory.reset()
         self.attempt_ledger.reset()
         if not keep_experiences:
@@ -719,15 +721,86 @@ class LPLHAgent:
                     logger.warning(f"Neutral experience failed ({trigger_type}): {e}")
         record_timing("experience_summary_and_storage", timer)
 
+        timer = time.perf_counter()
         source_location_for_attempt = prev_location or self.kg_map.current_location or "unknown"
+        action_failure_memory = {
+            "status": "not_applicable",
+            "source_location": source_location_for_attempt,
+            "command": completed_action,
+            "stored_failure": None,
+            "removed_failure": None,
+            "known_failures_here_after": [],
+            "world_signature": {},
+            "failure_reason_prompt": "",
+            "failure_reason_raw_response": "",
+            "error": "",
+        }
+
         if action_valid is True:
             self.consecutive_failures = 0
             self.recent_failed_actions = []
+            removed_failure = self.failed_action_memory.remove(
+                action_failure_memory["source_location"],
+                completed_action,
+            )
+            if removed_failure:
+                action_failure_memory["status"] = "removed_after_success"
+                action_failure_memory["removed_failure"] = removed_failure
+            else:
+                action_failure_memory["status"] = "valid_no_prior_failure"
         elif action_valid is False:
             self.consecutive_failures += 1
             self.recent_failed_actions.append(completed_action)
             if len(self.recent_failed_actions) > 5:
                 self.recent_failed_actions = self.recent_failed_actions[-5:]
+            failure_location = action_failure_memory["source_location"]
+            world_signature = self._world_signature(failure_location, score)
+            action_failure_memory["world_signature"] = world_signature
+            fallback_reason = self._fallback_failure_reason(observation)
+            failure_reason = fallback_reason
+            try:
+                reason = self.llm.explain_action_failure(
+                    location=failure_location,
+                    command=completed_action,
+                    observation=observation,
+                    world_signature=world_signature,
+                )
+                action_failure_memory["failure_reason_prompt"] = (
+                    self.llm.last_failure_reason_prompt or ""
+                )
+                action_failure_memory["failure_reason_raw_response"] = (
+                    self.llm.last_failure_reason_raw_response or ""
+                )
+                if reason:
+                    failure_reason = reason
+            except Exception as e:
+                logger.warning(f"Action failure explanation failed: {e}")
+                action_failure_memory["error"] = str(e)
+                action_failure_memory["failure_reason_prompt"] = (
+                    self.llm.last_failure_reason_prompt or ""
+                )
+                action_failure_memory["failure_reason_raw_response"] = (
+                    self.llm.last_failure_reason_raw_response or ""
+                )
+            failure_status, failure_record = self.failed_action_memory.record(
+                location=failure_location,
+                command=completed_action,
+                observation=observation,
+                failure_reason=failure_reason,
+                world_signature=world_signature,
+            )
+            action_failure_memory["status"] = failure_status
+            action_failure_memory["stored_failure"] = failure_record
+        elif action_valid is not None:
+            action_failure_memory["status"] = "validation_unknown"
+
+        action_failure_memory["known_failures_here_after"] = (
+            self.failed_action_memory.records_for_location(
+                action_failure_memory["source_location"]
+            )
+        )
+        detail["modules"]["action_failure_memory"] = action_failure_memory
+        record_timing("action_failure_memory", timer)
 
         timer = time.perf_counter()
         location_changed_for_affordance = (
@@ -1131,6 +1204,9 @@ class LPLHAgent:
         same_state_tried_context = self.state_action_memory.format_for_prompt(
             current_state_snapshot
         )
+        known_failed_here = self.failed_action_memory.format_for_prompt(
+            self.kg_map.current_location or "unknown"
+        )
         problem_attempts_here = self.attempt_ledger.format_problem_attempts_for_prompt(
             self.kg_map.current_location or "unknown"
         )
@@ -1154,6 +1230,7 @@ class LPLHAgent:
             current_objects_with_state=current_objects_with_state,
             stored_situations=self.situation_memory.active_situations(),
             action_space_context=action_space_context,
+            known_failed_here=known_failed_here,
             problem_attempts_here=problem_attempts_here,
             command_history_context=command_history_context,
             same_state_tried_commands=same_state_tried_commands,
@@ -1177,7 +1254,8 @@ class LPLHAgent:
             experiences=experiences,
             stored_situations=stored_situations,
             brainstormed_command_ideas=brainstormed_command_ideas,
-            known_failed_commands_here=problem_attempts_here,
+            known_failed_commands_here=known_failed_here,
+            problem_attempts_here=problem_attempts_here,
             command_history_here=command_history_context,
             same_state_tried_commands=same_state_tried_context,
             history=self._format_history(),
@@ -1226,6 +1304,7 @@ class LPLHAgent:
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
             "affordance_agenda": brainstormed_command_ideas,
+            "known_failed_commands_here": known_failed_here,
             "problem_attempts_here": problem_attempts_here,
             "command_history_here": command_history_context,
             "same_state_tried_commands": same_state_tried_context,
@@ -1247,6 +1326,7 @@ class LPLHAgent:
                                 current_objects_with_state: list,
                                 stored_situations: list,
                                 action_space_context: str,
+                                known_failed_here: str,
                                 problem_attempts_here: str,
                                 command_history_context: str,
                                 same_state_tried_commands: list[str],
@@ -1257,6 +1337,10 @@ class LPLHAgent:
         """Run LPLH2 affordance brainstorming for the next action prompt."""
         failure_context = self.affordance_brainstormer.failure_context(
             recent_failed_commands=self.recent_failed_actions,
+            known_failed_commands_here=known_failed_here,
+        )
+        ledger_failure_context = self.affordance_brainstormer.failure_context(
+            recent_failed_commands=[],
             known_failed_commands_here=problem_attempts_here,
         )
         state_signature = self.affordance_brainstormer.state_signature(
@@ -1271,6 +1355,7 @@ class LPLHAgent:
         )
         filtered_commands = (
             failure_context["failed_commands"]
+            + ledger_failure_context["failed_commands"]
             + unproductive_commands
             + list(same_state_tried_commands or [])
         )
@@ -1287,7 +1372,10 @@ class LPLHAgent:
         same_state_records = self.state_action_memory.records_for_state(
             same_state_snapshot
         )
-        failed_records_here = self.attempt_ledger.problem_attempts_for_location(
+        failed_records_here = self.failed_action_memory.records_for_location(
+            self.kg_map.current_location or "unknown"
+        )
+        ledger_problem_records_here = self.attempt_ledger.problem_attempts_for_location(
             self.kg_map.current_location or "unknown"
         )
         attempt_counts_here = self.attempt_ledger.counts_for_location(
@@ -1305,6 +1393,7 @@ class LPLHAgent:
             "visible_object_names": list(current_objects or []),
             "inventory": list(self.kg_map.inventory),
             "recent_failed_commands": list(self.recent_failed_actions),
+            "known_failed_commands_here": known_failed_here,
             "problem_attempts_here": problem_attempts_here,
             "command_history_context": command_history_context,
             "recent_command_outcomes": recent_command_outcomes,
@@ -1313,9 +1402,12 @@ class LPLHAgent:
             "same_state_tried_commands": list(same_state_tried_commands or []),
             "same_state_tried_records": same_state_records,
             "failed_records_here": failed_records_here,
+            "ledger_problem_records_here": ledger_problem_records_here,
             "attempt_counts_here": attempt_counts_here,
             "pending_carryover_commands": [],
-            "failed_command_verbs": failure_context["failed_verbs"],
+            "failed_command_verbs": list(dict.fromkeys(
+                failure_context["failed_verbs"] + ledger_failure_context["failed_verbs"]
+            )),
             "active_situations": list(stored_situations or []),
             "score": score,
             "state_signature": state_signature,
@@ -1372,7 +1464,7 @@ class LPLHAgent:
                 result["affordance_agenda"] = self.affordance_brainstormer.build_agenda(
                     result["ideas"],
                     tried_records=same_state_records,
-                    failed_records=failed_records_here,
+                    failed_records=failed_records_here + ledger_problem_records_here,
                     attempt_counts=attempt_counts_here,
                 )
                 result["ideas_for_prompt"] = self.affordance_brainstormer.format_agenda_for_prompt(
@@ -1390,7 +1482,8 @@ class LPLHAgent:
                 visible_objects=result["visible_objects"],
                 inventory=result["inventory"],
                 recent_failed_commands=result["recent_failed_commands"],
-                known_failed_commands_here=problem_attempts_here,
+                known_failed_commands_here=known_failed_here,
+                problem_attempts_here=problem_attempts_here,
                 command_history_here=command_history_context,
                 recent_command_outcomes=recent_command_outcomes,
                 failed_command_verbs=result["failed_command_verbs"],
@@ -1423,11 +1516,11 @@ class LPLHAgent:
             result["ideas"] = merge["merged_ideas"]
             if result["ideas"]:
                 result["affordance_agenda"] = self.affordance_brainstormer.build_agenda(
-                    result["ideas"],
-                    tried_records=same_state_records,
-                    failed_records=failed_records_here,
-                    attempt_counts=attempt_counts_here,
-                )
+                result["ideas"],
+                tried_records=same_state_records,
+                failed_records=failed_records_here + ledger_problem_records_here,
+                attempt_counts=attempt_counts_here,
+            )
                 result["ideas_for_prompt"] = self.affordance_brainstormer.format_agenda_for_prompt(
                     result["affordance_agenda"]
                 )
@@ -1475,6 +1568,7 @@ class LPLHAgent:
         same_state_tried_commands = self.state_action_memory.commands_for_state(
             current_state_snapshot
         )
+        known_failed_here = self.failed_action_memory.format_for_prompt(location)
         problem_attempts_here = self.attempt_ledger.format_problem_attempts_for_prompt(location)
         recent_command_outcomes = self._recent_same_location_outcomes(location)
         recent_failed_for_gate = list(self.recent_failed_actions)
@@ -1488,6 +1582,10 @@ class LPLHAgent:
         )
         failure_context = self.affordance_brainstormer.failure_context(
             recent_failed_commands=recent_failed_for_gate,
+            known_failed_commands_here=known_failed_here,
+        )
+        ledger_failure_context = self.affordance_brainstormer.failure_context(
+            recent_failed_commands=[],
             known_failed_commands_here=problem_attempts_here,
         )
         cached_affordance_ideas = self.affordance_brainstormer.cached_ideas_for_state(
@@ -1495,6 +1593,7 @@ class LPLHAgent:
             state_signature=affordance_signature,
             failed_commands=(
                 failure_context["failed_commands"]
+                + ledger_failure_context["failed_commands"]
                 + list(same_state_tried_commands or [])
             ),
         )
@@ -1526,6 +1625,7 @@ class LPLHAgent:
             "inventory": list(self.kg_map.inventory),
             "active_situations": self.situation_memory.active_situations(),
             "recent_failed_commands": recent_failed_for_gate,
+            "known_failed_commands_here": known_failed_here,
             "problem_attempts_here": problem_attempts_here,
             "recent_command_outcomes": recent_command_outcomes,
             "same_state_tried_commands": same_state_tried_commands,
@@ -1557,7 +1657,8 @@ class LPLHAgent:
                 visible_objects=visible_objects,
                 active_situations=result["active_situations"],
                 recent_failed_commands=recent_failed_for_gate,
-                known_failed_commands_here=problem_attempts_here,
+                known_failed_commands_here=known_failed_here,
+                problem_attempts_here=problem_attempts_here,
                 recent_command_outcomes=recent_command_outcomes,
                 same_state_tried_commands=same_state_tried_commands,
                 action_transition_candidate=action_transition_candidate,
@@ -3416,6 +3517,7 @@ class LPLHAgent:
             "experiences_stored": self.experience_lib.num_experiences(),
             "situations_stored": len(self.situation_memory.active_situations()),
             "attempt_ledger": self.attempt_ledger.to_dict(),
+            "failed_action_memory": self.failed_action_memory.to_dict(),
             "current_location": self.kg_map.current_location,
         }
 

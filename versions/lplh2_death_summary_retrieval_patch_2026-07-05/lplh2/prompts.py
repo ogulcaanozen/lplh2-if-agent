@@ -203,7 +203,8 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
 - **Affordance Agenda**: Review pending object/inventory commands and the already-tried commands attached to the same situation. Pending commands may include useful verbs not yet learned by the action space. Treat them as strong candidates when they directly apply to visible objects, inventory, stored situations, or recent failed syntax, but do not execute them blindly if navigation or another action is clearly better.
 - **Condition-Level Agenda**: Some affordance agenda entries may have "kind": "condition"; these target a room/environment/perception/parser condition rather than one visible object. Consider them when recent observations suggest normal commands are being distorted, obscured, blocked, or mismatched.
-- **Problematic Attempts From Ledger**: These commands previously produced invalid or unproductive outcomes here. Treat them as factual cautionary evidence, not as hard bans. Retry only if the current observation, inventory, visible objects, or score have changed enough to give a concrete reason.
+- **Known Failed Commands Here**: These commands failed at this location and include a concise failure reason. Treat them as strong cautionary evidence. Retry only if the current observation, inventory, visible objects, or score have changed enough to give a concrete reason.
+- **Problematic Attempts From Ledger**: These commands previously produced invalid or unproductive outcomes here. Treat them as factual room-history evidence, not as hard bans. Use them together with Known Failed Commands and Same-State Tried Commands to avoid loops.
 - **Command History In This Room**: Review factual attempt counts and outcomes for this room. Commands marked with * were last tried in the current compact state. Prefer never-tried commands when they are reasonable; retry a repeated command only when you can name a concrete reason.
 - **Same-State Tried Commands**: These commands were already tried from the exact same state snapshot shown now. Treat them as strong cautionary evidence. Prefer a different command unless you can name a concrete state difference or a strong reason the retry is still useful.
 - **Objects & Interactions**: Focus on confirmed items or directions. If uncertain leads might advance the game, consider them cautiously.
@@ -235,6 +236,7 @@ Your internal reasoning steps Here.
 - **Then**: Verified directions ('direction') or items ('have').
 2. **Conflict Resolution**
 - Treat prior attempts known to fail at this location or context as cautionary evidence.
+- Avoid exact commands from the Known Failed Commands Here list unless the current state has meaningfully changed and you can justify retrying.
 - Avoid exact commands from the Problematic Attempts From Ledger list unless the current state has meaningfully changed and you can justify retrying.
 - Validate uncertain ('may_') directions or items before fully committing to them.
 - After verify all the exits in one room then you can fully trust the map.
@@ -270,8 +272,11 @@ Your internal reasoning steps Here.
 === AFFORDANCE AGENDA (PENDING VS TRIED COMMANDS) ===
 {brainstormed_command_ideas}
 
-=== PROBLEMATIC ATTEMPTS FROM LEDGER ===
+=== KNOWN FAILED COMMANDS HERE ===
 {known_failed_commands_here}
+
+=== PROBLEMATIC ATTEMPTS FROM LEDGER ===
+{problem_attempts_here}
 
 === COMMAND HISTORY IN THIS ROOM ===
 {command_history_here}
@@ -639,7 +644,8 @@ Current Inventory: {inventory}
 Visible Objects Here: {visible_objects}
 Active Stored Situations: {active_situations}
 Recent Failed Commands: {recent_failed_commands}
-Problematic Attempts From Ledger: {known_failed_commands_here}
+Known Failed Commands Here: {known_failed_commands_here}
+Problematic Attempts From Ledger: {problem_attempts_here}
 Recent Command Outcomes Here: {recent_command_outcomes}
 Same-State Tried Commands: {same_state_tried_commands}
 Action Transition Candidate: {action_transition_candidate}
@@ -1229,13 +1235,14 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 2. Inventory items and how they might be used now.
 3. Active stored situations that may now be addressable because of the current room, inventory, or visible objects.
 4. Recent failed commands. If a command failed because the syntax was too specific, suggest simpler alternatives.
-5. Problematic attempts from the attempt ledger at this exact location. Avoid those exact commands unless the current observation, inventory, visible objects, or score have changed enough to make retrying reasonable.
-6. Command history in this room. Prefer commands that have not already been tried here when they are reasonable. If every obvious command was already tried, suggest a meaningfully different angle rather than regenerating the same command.
-7. Failed command verbs as cautionary evidence. Do not treat a failed verb as globally impossible; a verb can fail on one object and still work on another. Use this mainly to avoid repeating the same failed use.
-8. Valid-but-unproductive commands in this exact state. Do not re-propose the exact command unless the observation, inventory, visible objects, or score changed enough to justify retrying.
-9. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
-10. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
-11. Recent same-location command outcomes. If several different commands in the same location produce similarly repeated, echoed, garbled, obscured, blocked, mismatched, or condition-dominated observations, consider whether a persistent environmental/perceptual/mental/parser-like condition is interfering with normal command effects.
+5. Known failed commands at this location. These include a failure reason. Avoid those exact commands unless the current observation, inventory, visible objects, or score have changed enough to make retrying reasonable.
+6. Problematic attempts from the attempt ledger at this exact location. Use them as factual attempt history and avoid regenerating the same invalid or unproductive command.
+7. Command history in this room. Prefer commands that have not already been tried here when they are reasonable. If every obvious command was already tried, suggest a meaningfully different angle rather than regenerating the same command.
+8. Failed command verbs as cautionary evidence. Do not treat a failed verb as globally impossible; a verb can fail on one object and still work on another. Use this mainly to avoid repeating the same failed use.
+9. Valid-but-unproductive commands in this exact state. Do not re-propose the exact command unless the observation, inventory, visible objects, or score changed enough to justify retrying.
+10. Same-state tried commands. Treat them as evidence of what has already been attempted from the exact state snapshot.
+11. Pending carryover commands. Preserve still-useful pending ideas and propose alternatives when earlier ideas failed.
+12. Recent same-location command outcomes. If several different commands in the same location produce similarly repeated, echoed, garbled, obscured, blocked, mismatched, or condition-dominated observations, consider whether a persistent environmental/perceptual/mental/parser-like condition is interfering with normal command effects.
 
 **Output Rules:**
 - Output JSON only between |start| and |end|.
@@ -1252,6 +1259,7 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
 - Use object state when proposing commands. Avoid commands whose main purpose is to create a state that the object already has.
 - Keep commands short and directly executable: "take lantern", "turn on lantern", "move rug", "look under rug".
 - Do not repeat an exact recent failed command.
+- Avoid exact commands listed in Known Failed Commands Here unless the current state has meaningfully changed.
 - Avoid exact commands listed in Problematic Attempts From Ledger unless the current state has meaningfully changed.
 - Avoid exact commands that Command History In This Room says already gave the same result every time, unless the current state has meaningfully changed.
 - Avoid exact commands listed in Unproductive Commands Here or Same-State Tried Commands unless the current state has meaningfully changed.
@@ -1365,7 +1373,8 @@ Current Score: {score}
 Visible Objects: {visible_objects}
 Inventory: {inventory}
 Recent Failed Commands: {recent_failed_commands}
-Problematic Attempts From Ledger: {known_failed_commands_here}
+Known Failed Commands Here: {known_failed_commands_here}
+Problematic Attempts From Ledger: {problem_attempts_here}
 Command History In This Room: {command_history_here}
 Recent Command Outcomes Here: {recent_command_outcomes}
 Failed Command Verbs Here: {failed_command_verbs}
@@ -1375,6 +1384,62 @@ Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
 Learned Action Space Here: {action_space}
 Retrieved Experiences: {experiences}"""
+
+
+# ---------------------------------------------------------------------
+# LPLH2 Enhancement: Action Failure Reason
+# Produces the free-text reason stored in FailedActionMemory.
+# ---------------------------------------------------------------------
+ACTION_FAILURE_REASON_PROMPT = """<START OF INSTRUCTIONS>
+You are explaining why a text-game command failed.
+
+Return one brief, concrete failure reason based only on the exact game observation. Do not invent a fixed category or type. Do not suggest future actions.
+
+**Output Format:**
+|start|
+{{
+  "failure_reason": "..."
+}}
+|end|
+
+**Good Examples:**
+
+Location: Forest Path
+Command: west
+Observation: You can't go that way.
+Output:
+|start|
+{{
+  "failure_reason": "There is no west exit from this location."
+}}
+|end|
+
+Location: Up a Tree
+Command: open clasp
+Observation: I don't know the word "clasp".
+Output:
+|start|
+{{
+  "failure_reason": "The parser does not recognize the word clasp."
+}}
+|end|
+
+Location: Forest Path
+Command: climb tree
+Observation: You cannot climb any higher.
+Output:
+|start|
+{{
+  "failure_reason": "The player is already as high in the tree as this command can take them."
+}}
+|end|
+
+<END OF INSTRUCTIONS>
+
+Location: {location}
+Command: {command}
+Observation: {observation}
+World Signature: {world_signature}"""
 
 
 # LPLH2 Enhancement: evaluates valid but no-progress commands before storing

@@ -53,6 +53,7 @@ class GameRunner:
         self._affordance_log_file = None
         self._action_generation_log_file = None
         self._attempt_ledger_log_file = None
+        self._action_failure_log_file = None
         self._auxiliary_gate_log_file = None
         self._kg_location_log_file = None
         self._timing_log_file = None
@@ -64,6 +65,7 @@ class GameRunner:
         self._affordance_log_path = None
         self._action_generation_log_path = None
         self._attempt_ledger_log_path = None
+        self._action_failure_log_path = None
         self._auxiliary_gate_log_path = None
         self._kg_location_log_path = None
         self._timing_log_path = None
@@ -97,6 +99,7 @@ class GameRunner:
         affordance_log_path = os.path.join(self._experiment_log_dir, "affordance_brainstorm_log.txt")
         action_generation_log_path = os.path.join(self._experiment_log_dir, "action_generation_log.txt")
         attempt_ledger_log_path = os.path.join(self._experiment_log_dir, "attempt_ledger_log.txt")
+        action_failure_log_path = os.path.join(self._experiment_log_dir, "action_failure_memory_log.txt")
         auxiliary_gate_log_path = os.path.join(self._experiment_log_dir, "auxiliary_gate_log.txt")
         kg_location_log_path = os.path.join(self._experiment_log_dir, "kg_location_log.txt")
         timing_log_path = os.path.join(self._experiment_log_dir, "module_timing_log.txt")
@@ -106,6 +109,7 @@ class GameRunner:
         self._affordance_log_path = affordance_log_path
         self._action_generation_log_path = action_generation_log_path
         self._attempt_ledger_log_path = attempt_ledger_log_path
+        self._action_failure_log_path = action_failure_log_path
         self._auxiliary_gate_log_path = auxiliary_gate_log_path
         self._kg_location_log_path = kg_location_log_path
         self._timing_log_path = timing_log_path
@@ -119,6 +123,9 @@ class GameRunner:
         )
         self._attempt_ledger_log_file = open(
             attempt_ledger_log_path, "w", encoding="utf-8", buffering=1
+        )
+        self._action_failure_log_file = open(
+            action_failure_log_path, "w", encoding="utf-8", buffering=1
         )
         self._auxiliary_gate_log_file = open(
             auxiliary_gate_log_path, "w", encoding="utf-8", buffering=1
@@ -186,6 +193,12 @@ class GameRunner:
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps}\n"
         )
         self._attempt_ledger_log_file.write("=" * 70 + "\n")
+        self._action_failure_log_file.write(f"LPLH2 Action Failure Memory Log - {game_name}\n")
+        self._action_failure_log_file.write(
+            f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
+            f"LLM_es: {aux_model}\n"
+        )
+        self._action_failure_log_file.write("=" * 70 + "\n")
         self._auxiliary_gate_log_file.write(f"LPLH2 Auxiliary Gate Log - {game_name}\n")
         self._auxiliary_gate_log_file.write(
             f"Epochs: {self.num_epochs} | Steps/epoch: {self.max_steps} | "
@@ -209,6 +222,7 @@ class GameRunner:
         print(f"Affordance brainstorm log: {affordance_log_path}")
         print(f"Action generation log: {action_generation_log_path}")
         print(f"Attempt ledger log: {attempt_ledger_log_path}")
+        print(f"Action failure memory log: {action_failure_log_path}")
         print(f"Auxiliary gate log: {auxiliary_gate_log_path}")
         print(f"KG location log: {kg_location_log_path}")
         print(f"Module timing log: {timing_log_path}")
@@ -342,6 +356,9 @@ class GameRunner:
             if self._attempt_ledger_log_file:
                 self._attempt_ledger_log_file.close()
                 self._attempt_ledger_log_file = None
+            if self._action_failure_log_file:
+                self._action_failure_log_file.close()
+                self._action_failure_log_file = None
             if self._auxiliary_gate_log_file:
                 self._auxiliary_gate_log_file.close()
                 self._auxiliary_gate_log_file = None
@@ -380,6 +397,7 @@ class GameRunner:
             print(f"  Affordance log: {self._affordance_log_path}")
             print(f"  Action generation log: {self._action_generation_log_path}")
             print(f"  Attempt ledger log: {self._attempt_ledger_log_path}")
+            print(f"  Action failure log: {self._action_failure_log_path}")
             print(f"  Auxiliary gate log: {self._auxiliary_gate_log_path}")
             print(f"  KG location log: {self._kg_location_log_path}")
             print(f"  Module timing log: {self._timing_log_path}")
@@ -423,6 +441,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "attempt_ledger_log_path": self._attempt_ledger_log_path,
+            "action_failure_log_path": self._action_failure_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "kg_location_log_path": self._kg_location_log_path,
             "timing_log_path": self._timing_log_path,
@@ -819,6 +838,7 @@ class GameRunner:
         self._log_auxiliary_gate_step(epoch, step, d)
         self._log_affordance_brainstorm_step(epoch, step, d)
         self._log_attempt_ledger_step(epoch, step, d)
+        self._log_action_failure_memory_step(epoch, step, d)
         self._log_action_generation_step(epoch, step, d)
         self._log_module_timing_step(epoch, step, d)
 
@@ -1103,6 +1123,8 @@ class GameRunner:
             "visible_objects": entry.get("visible_objects", []),
             "inventory": entry.get("inventory", []),
             "recent_failed_commands": entry.get("recent_failed_commands", []),
+            "known_failed_commands_here": entry.get("known_failed_commands_here", "[]"),
+            "problem_attempts_here": entry.get("problem_attempts_here", "[]"),
             "failed_commands": entry.get("failed_commands", []),
             "unproductive_commands": entry.get("unproductive_commands", []),
             "failed_command_verbs": entry.get("failed_command_verbs", []),
@@ -1132,6 +1154,10 @@ class GameRunner:
         self._affordance_log_file.write(str(entry.get("action_space_context", "")))
         self._affordance_log_file.write("\n\ncommand history supplied to brainstorm:\n")
         self._affordance_log_file.write(str(entry.get("command_history_context", "")))
+        self._affordance_log_file.write("\n\nknown failed commands supplied to brainstorm:\n")
+        self._affordance_log_file.write(str(entry.get("known_failed_commands_here", "[]")))
+        self._affordance_log_file.write("\n\nproblem attempts from ledger supplied to brainstorm:\n")
+        self._affordance_log_file.write(str(entry.get("problem_attempts_here", "[]")))
         self._affordance_log_file.write("\n\nattempt counts for this location:\n")
         self._affordance_log_file.write(
             json.dumps(entry.get("attempt_counts_here", {}), indent=2, ensure_ascii=False)
@@ -1189,6 +1215,10 @@ class GameRunner:
         self._affordance_log_file.write("\n\nfailed records here:\n")
         self._affordance_log_file.write(
             json.dumps(entry.get("failed_records_here", []), indent=2, ensure_ascii=False)
+        )
+        self._affordance_log_file.write("\n\nledger problem records here:\n")
+        self._affordance_log_file.write(
+            json.dumps(entry.get("ledger_problem_records_here", []), indent=2, ensure_ascii=False)
         )
         self._affordance_log_file.write("\n\npending carryover commands supplied to brainstorm:\n")
         self._affordance_log_file.write(
@@ -1257,6 +1287,61 @@ class GameRunner:
         self._attempt_ledger_log_file.write("\n\nroom context after step:\n")
         self._attempt_ledger_log_file.write(str(entry.get("room_context_after", "")))
         self._attempt_ledger_log_file.write("\n" + "=" * 90 + "\n")
+
+    def _log_action_failure_memory_step(self, epoch: int, step: int, detail: dict):
+        """Write action-failure memory decisions for every step."""
+        if not self._action_failure_log_file:
+            return
+
+        modules = detail.get("modules", {})
+        entry = modules.get("action_failure_memory", {})
+        if not entry:
+            return
+
+        metadata = {
+            "step": detail.get("step"),
+            "action": detail.get("executed_action") or detail.get("prev_action"),
+            "status": entry.get("status"),
+            "source_location": entry.get("source_location"),
+            "command": entry.get("command"),
+        }
+
+        self._action_failure_log_file.write("\n" + "=" * 90 + "\n")
+        self._action_failure_log_file.write(
+            f"[EPOCH {epoch} | STEP {step:03d}] "
+            f"status: {entry.get('status', 'missing')}\n"
+        )
+        self._action_failure_log_file.write("-" * 90 + "\n")
+        self._action_failure_log_file.write("metadata:\n")
+        self._action_failure_log_file.write(json.dumps(metadata, indent=2, ensure_ascii=False))
+        self._action_failure_log_file.write("\n\nworld signature:\n")
+        self._action_failure_log_file.write(
+            json.dumps(entry.get("world_signature", {}), indent=2, ensure_ascii=False)
+        )
+        self._action_failure_log_file.write("\n\nfailure reason prompt:\n")
+        self._action_failure_log_file.write(str(entry.get("failure_reason_prompt", "")))
+        self._action_failure_log_file.write("\n\nfailure reason llm response:\n")
+        self._action_failure_log_file.write(str(entry.get("failure_reason_raw_response", "")))
+        self._action_failure_log_file.write("\n\nstored failure:\n")
+        self._action_failure_log_file.write(
+            json.dumps(entry.get("stored_failure"), indent=2, ensure_ascii=False)
+        )
+        self._action_failure_log_file.write("\n\nremoved failure:\n")
+        self._action_failure_log_file.write(
+            json.dumps(entry.get("removed_failure"), indent=2, ensure_ascii=False)
+        )
+        if entry.get("error"):
+            self._action_failure_log_file.write("\n\nerror:\n")
+            self._action_failure_log_file.write(str(entry.get("error")))
+        self._action_failure_log_file.write("\n\nknown failures at source location after step:\n")
+        self._action_failure_log_file.write(
+            json.dumps(
+                entry.get("known_failures_here_after", []),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        self._action_failure_log_file.write("\n" + "=" * 90 + "\n")
 
     def _log_action_generation_step(self, epoch: int, step: int, detail: dict):
         """Write main action-LLM reasoning and selected commands for every step."""
@@ -1329,11 +1414,10 @@ class GameRunner:
             str(generation.get("affordance_agenda")
                 or generation.get("brainstormed_command_ideas", "[]"))
         )
+        self._action_generation_log_file.write("\n\nknown failed commands here:\n")
+        self._action_generation_log_file.write(str(generation.get("known_failed_commands_here", "[]")))
         self._action_generation_log_file.write("\n\nproblem attempts from ledger:\n")
-        self._action_generation_log_file.write(
-            str(generation.get("problem_attempts_here")
-                or generation.get("known_failed_commands_here", "[]"))
-        )
+        self._action_generation_log_file.write(str(generation.get("problem_attempts_here", "[]")))
         self._action_generation_log_file.write("\n\ncommand history in this room:\n")
         self._action_generation_log_file.write(str(generation.get("command_history_here", "")))
         self._action_generation_log_file.write("\n\nsame-state tried commands:\n")
@@ -1394,6 +1478,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "attempt_ledger_log_path": self._attempt_ledger_log_path,
+            "action_failure_log_path": self._action_failure_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "kg_location_log_path": self._kg_location_log_path,
             "timing_log_path": self._timing_log_path,
@@ -1416,6 +1501,7 @@ class GameRunner:
         results["affordance_log_path"] = self._affordance_log_path
         results["action_generation_log_path"] = self._action_generation_log_path
         results["attempt_ledger_log_path"] = self._attempt_ledger_log_path
+        results["action_failure_log_path"] = self._action_failure_log_path
         results["auxiliary_gate_log_path"] = self._auxiliary_gate_log_path
         results["kg_location_log_path"] = self._kg_location_log_path
         results["timing_log_path"] = self._timing_log_path
@@ -1447,6 +1533,7 @@ class GameRunner:
             "affordance_log_path": self._affordance_log_path,
             "action_generation_log_path": self._action_generation_log_path,
             "attempt_ledger_log_path": self._attempt_ledger_log_path,
+            "action_failure_log_path": self._action_failure_log_path,
             "auxiliary_gate_log_path": self._auxiliary_gate_log_path,
             "kg_location_log_path": self._kg_location_log_path,
             "timing_log_path": self._timing_log_path,

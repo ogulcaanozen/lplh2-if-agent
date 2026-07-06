@@ -201,8 +201,8 @@ class AttemptLedger:
                                       max_items: int = 8) -> list[dict[str, Any]]:
         """Return compact invalid/unproductive attempts for prompt context.
 
-        This replaces the older failed-command memory: the ledger is factual
-        and does not ask an extra LLM to restate why a command failed.
+        This complements failed-command memory: the ledger is factual attempt
+        history, while failed-command memory stores a concise semantic reason.
         """
         loc_key = normalize_location_key(location) or "unknown"
         records = [

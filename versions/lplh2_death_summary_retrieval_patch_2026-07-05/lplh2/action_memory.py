@@ -1,8 +1,9 @@
-"""Same-state action memory for LPLH2.
+"""Action failure memory for LPLH2.
 
-Invalid and unproductive command counts live in AttemptLedger. This module keeps
-only exact-state advisory records used to discourage repeating the same command
-from the same compact state snapshot.
+This memory stores exact command failures at exact locations, with a compact
+world-state snapshot. The visible records stay simple; deterministic keys are
+kept only inside this class for deduplication and removal when a command later
+works.
 """
 
 from __future__ import annotations
@@ -12,6 +13,147 @@ import re
 from typing import Any
 
 from .command_keys import normalize_command_key, normalize_location_key, normalize_text
+
+
+class FailedActionMemory:
+    """Location-scoped memory of failed commands."""
+
+    def __init__(self):
+        self._records_by_location: dict[str, list[dict[str, Any]]] = {}
+        self._index: dict[str, dict[str, Any]] = {}
+
+    def reset(self):
+        self._records_by_location = {}
+        self._index = {}
+
+    def record(self, location: str, command: str, observation: str,
+               failure_reason: str, world_signature: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Store or refresh a location+command failure record."""
+        record = {
+            "location": self._clean(location) or "unknown",
+            "command": self._clean(command),
+            "observation": self._clean_observation(observation),
+            "failure_reason": self._clean(failure_reason) or "The game rejected this command.",
+            "world_signature": self._clean_signature(world_signature),
+            "attempt_count": 1,
+            "previous_failures": [],
+        }
+        if not record["command"]:
+            return "duplicate", record
+
+        key = self._key(record["location"], record["command"])
+        if key in self._index:
+            stored = self._index[key]
+            stored["attempt_count"] = int(stored.get("attempt_count", 1) or 1) + 1
+            if self._materially_different_failure(stored, record):
+                previous = {
+                    "observation": stored.get("observation", ""),
+                    "failure_reason": stored.get("failure_reason", ""),
+                }
+                history = list(stored.get("previous_failures", []))
+                if previous not in history:
+                    history.append(previous)
+                stored["previous_failures"] = history[-3:]
+                stored["observation"] = record["observation"]
+                stored["failure_reason"] = record["failure_reason"]
+                stored["world_signature"] = record["world_signature"]
+                return "updated_duplicate", dict(stored)
+            return "duplicate", dict(stored)
+
+        loc_key = self._location_key(record["location"])
+        self._records_by_location.setdefault(loc_key, []).append(record)
+        self._index[key] = record
+        return "stored", dict(record)
+
+    def remove(self, location: str, command: str) -> dict[str, Any] | None:
+        """Remove a failure record when the same command later succeeds."""
+        key = self._key(location, command)
+        record = self._index.pop(key, None)
+        if record is None:
+            return None
+
+        loc_key = self._location_key(record.get("location", location))
+        self._records_by_location[loc_key] = [
+            item for item in self._records_by_location.get(loc_key, [])
+            if self._key(item.get("location", ""), item.get("command", "")) != key
+        ]
+        if not self._records_by_location.get(loc_key):
+            self._records_by_location.pop(loc_key, None)
+        return dict(record)
+
+    def records_for_location(self, location: str) -> list[dict[str, Any]]:
+        loc_key = self._location_key(location)
+        return [dict(item) for item in self._records_by_location.get(loc_key, [])]
+
+    def format_for_prompt(self, location: str, max_items: int = 12) -> str:
+        records = self.records_for_location(location)[-max_items:]
+        if not records:
+            return "[]"
+        return json.dumps(records, ensure_ascii=False)
+
+    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            loc: [dict(item) for item in records]
+            for loc, records in self._records_by_location.items()
+        }
+
+    def _key(self, location: str, command: str) -> str:
+        return f"{self._location_key(location)}|{self._command_key(command)}"
+
+    def _materially_different_failure(self, stored: dict[str, Any],
+                                      new_record: dict[str, Any]) -> bool:
+        old_reason = self._normalize(stored.get("failure_reason", ""))
+        new_reason = self._normalize(new_record.get("failure_reason", ""))
+        if new_reason and old_reason and new_reason != old_reason:
+            return True
+        old_obs = self._normalize(stored.get("observation", ""))
+        new_obs = self._normalize(new_record.get("observation", ""))
+        return bool(new_obs and old_obs and new_obs != old_obs)
+
+    def _location_key(self, location: str) -> str:
+        return normalize_location_key(location)
+
+    def _command_key(self, command: str) -> str:
+        return normalize_command_key(command)
+
+    def _clean_signature(self, signature: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(signature, dict):
+            return {}
+        cleaned = {
+            "location": self._clean(signature.get("location")) or "unknown",
+            "inventory": self._clean_list(signature.get("inventory")),
+            "visible_objects": self._clean_list(signature.get("visible_objects")),
+        }
+        if "score" in signature:
+            cleaned["score"] = signature.get("score")
+        return cleaned
+
+    def _clean_list(self, values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        output = []
+        seen = set()
+        for value in values:
+            clean = self._clean(value)
+            key = clean.lower()
+            if clean and key not in seen:
+                output.append(clean)
+                seen.add(key)
+        return output
+
+    def _clean(self, value: Any) -> str:
+        if value is None:
+            return ""
+        return re.sub(r"\s+", " ", str(value)).strip()
+
+    def _clean_command(self, value: Any) -> str:
+        return self._clean(value).lower()
+
+    def _clean_observation(self, value: Any) -> str:
+        return self._clean(value)[:500]
+
+    def _normalize(self, value: Any) -> str:
+        return normalize_text(value)
 
 
 class StateScopedActionMemory:
