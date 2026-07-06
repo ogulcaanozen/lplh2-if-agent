@@ -22,7 +22,7 @@ from .action_space import ActionSpace
 from .experience_lib import ExperienceLib
 from .opportunity_module import SituationMemory
 from .affordance_brainstormer import AffordanceBrainstormer
-from .action_memory import FailedActionMemory, StateScopedActionMemory
+from .action_memory import StateScopedActionMemory
 from .attempt_ledger import AttemptLedger
 from .command_keys import normalize_command_key, normalize_location_key
 from .llm_client import LLMClient
@@ -54,7 +54,6 @@ class LPLHAgent:
         self.experience_lib = ExperienceLib()
         self.situation_memory = SituationMemory()
         self.affordance_brainstormer = AffordanceBrainstormer()
-        self.failed_action_memory = FailedActionMemory()
         self.state_action_memory = StateScopedActionMemory()
         self.attempt_ledger = AttemptLedger()
 
@@ -88,7 +87,6 @@ class LPLHAgent:
         self.kg_map.reset()
         self.action_space.reset()
         self.situation_memory.reset()
-        self.failed_action_memory.reset()
         self.state_action_memory.reset()
         self.attempt_ledger.reset()
         if not keep_experiences:
@@ -206,6 +204,8 @@ class LPLHAgent:
             "total_actions_learned": self.action_space.num_actions(),
             "all_verbs": list(self.action_space.verbs.keys()),
         }
+        pure_rejection = self._is_pure_rejected_observation(action_valid, observation)
+        detail["pure_rejection_skip"] = pure_rejection
 
         extracted_triples = []
         applied_triples = []
@@ -225,63 +225,68 @@ class LPLHAgent:
             "action_transition_status": "",
         }
         timer = time.perf_counter()
-        try:
-            extracted_triples = self.fm.extract_relations(completed_action, observation)
-            room_title = self._extract_observation_room_title(observation)
-            fm_location = self._location_from_triples(extracted_triples)
-            kg_location_resolution["raw_room_title"] = room_title
-            kg_location_resolution["fm_location"] = fm_location
-            applied_triples = extracted_triples
-            prev_lower = completed_action.lower().strip()
-            if action_valid is False and prev_lower in self.kg_map._direction_set():
-                applied_triples = self._filter_failed_movement_triples(extracted_triples)
-            if room_title:
-                title_key = self._normalize_event_piece(room_title)
-                fm_key = self._normalize_event_piece(fm_location)
-                should_use_title = not fm_location or title_key != fm_key
-                if should_use_title:
-                    applied_triples = self._with_authoritative_location_triple(
-                        applied_triples,
-                        room_title,
+        if pure_rejection:
+            kg_location_resolution["location_after_update"] = self.kg_map.current_location
+            kg_location_resolution["action_transition_status"] = "skipped_pure_rejection"
+            logger.debug("KG relation extraction skipped for pure parser/world rejection")
+        else:
+            try:
+                extracted_triples = self.fm.extract_relations(completed_action, observation)
+                room_title = self._extract_observation_room_title(observation)
+                fm_location = self._location_from_triples(extracted_triples)
+                kg_location_resolution["raw_room_title"] = room_title
+                kg_location_resolution["fm_location"] = fm_location
+                applied_triples = extracted_triples
+                prev_lower = completed_action.lower().strip()
+                if action_valid is False and prev_lower in self.kg_map._direction_set():
+                    applied_triples = self._filter_failed_movement_triples(extracted_triples)
+                if room_title:
+                    title_key = self._normalize_event_piece(room_title)
+                    fm_key = self._normalize_event_piece(fm_location)
+                    should_use_title = not fm_location or title_key != fm_key
+                    if should_use_title:
+                        applied_triples = self._with_authoritative_location_triple(
+                            applied_triples,
+                            room_title,
+                        )
+                        kg_location_resolution["title_fallback_used"] = not bool(fm_location)
+                        kg_location_resolution["title_overrode_fm"] = bool(fm_location)
+                        kg_location_resolution["chosen_location_hint"] = room_title
+                self.kg_map.update(applied_triples, completed_action)
+                kg_location_resolution["location_after_update"] = self.kg_map.current_location
+                if (action_valid is True
+                        and prev_location
+                        and self.kg_map.current_location
+                        and self.kg_map.current_location != prev_location
+                        and prev_lower in self.kg_map._direction_set()):
+                    self.kg_map.confirm_direction(
+                        from_location=prev_location,
+                        direction=prev_lower,
+                        to_location=self.kg_map.current_location,
                     )
-                    kg_location_resolution["title_fallback_used"] = not bool(fm_location)
-                    kg_location_resolution["title_overrode_fm"] = bool(fm_location)
-                    kg_location_resolution["chosen_location_hint"] = room_title
-            self.kg_map.update(applied_triples, completed_action)
-            kg_location_resolution["location_after_update"] = self.kg_map.current_location
-            if (action_valid is True
-                    and prev_location
-                    and self.kg_map.current_location
-                    and self.kg_map.current_location != prev_location
-                    and prev_lower in self.kg_map._direction_set()):
-                self.kg_map.confirm_direction(
-                    from_location=prev_location,
-                    direction=prev_lower,
-                    to_location=self.kg_map.current_location,
-                )
-                kg_location_resolution["confirmed_transition_type"] = "direction"
-                kg_location_resolution["confirmed_transition"] = {
-                    "from": prev_location,
-                    "command": prev_lower,
-                    "to": self.kg_map.current_location,
-                }
-            elif (action_valid is True
-                    and prev_location
-                    and self.kg_map.current_location
-                    and self.kg_map.current_location != prev_location
-                    and prev_lower not in self.kg_map._direction_set()):
-                kg_location_resolution["confirmed_transition_type"] = "action_candidate"
-                kg_location_resolution["action_transition_candidate"] = {
-                    "from": prev_location,
-                    "command": completed_action,
-                    "to": self.kg_map.current_location,
-                }
-            logger.debug(f"KG-map updated with {len(applied_triples)} triples")
-        except Exception as e:
-            logger.warning(f"Relation extraction failed: {e}")
-            extracted_triples = [("ERROR", str(e), "")]
-            applied_triples = extracted_triples
-            kg_location_resolution["location_after_update"] = self.kg_map.current_location
+                    kg_location_resolution["confirmed_transition_type"] = "direction"
+                    kg_location_resolution["confirmed_transition"] = {
+                        "from": prev_location,
+                        "command": prev_lower,
+                        "to": self.kg_map.current_location,
+                    }
+                elif (action_valid is True
+                        and prev_location
+                        and self.kg_map.current_location
+                        and self.kg_map.current_location != prev_location
+                        and prev_lower not in self.kg_map._direction_set()):
+                    kg_location_resolution["confirmed_transition_type"] = "action_candidate"
+                    kg_location_resolution["action_transition_candidate"] = {
+                        "from": prev_location,
+                        "command": completed_action,
+                        "to": self.kg_map.current_location,
+                    }
+                logger.debug(f"KG-map updated with {len(applied_triples)} triples")
+            except Exception as e:
+                logger.warning(f"Relation extraction failed: {e}")
+                extracted_triples = [("ERROR", str(e), "")]
+                applied_triples = extracted_triples
+                kg_location_resolution["location_after_update"] = self.kg_map.current_location
         record_timing("fm_relation_extraction_and_kg_update", timer)
 
         detail["modules"]["kg_map"] = {
@@ -312,6 +317,8 @@ class LPLHAgent:
         if command_outcome.get("status") == "accepted" and action_valid is not True:
             raw_action_valid = action_valid
             action_valid = True
+            pure_rejection = False
+            detail["pure_rejection_skip"] = False
             action_space_detail = detail["modules"].get("action_space", {})
             action_space_detail["fm_prev_action_valid"] = raw_action_valid
             action_space_detail["prev_action_valid"] = True
@@ -333,9 +340,18 @@ class LPLHAgent:
                     action_space_detail["validity_override_split_error"] = str(e)
 
         timer = time.perf_counter()
-        action_transition_result = self._apply_gate_action_transition(
-            auxiliary_gate=auxiliary_gate,
-        )
+        if pure_rejection:
+            action_transition_result = {
+                "status": "skipped_pure_rejection",
+                "candidate": auxiliary_gate.get("action_transition_candidate", {}),
+                "decision": auxiliary_gate.get("decision", {}).get("kg_action_transition", {}),
+                "applied": False,
+                "reason": "latest command was a clear parser/world rejection",
+            }
+        else:
+            action_transition_result = self._apply_gate_action_transition(
+                auxiliary_gate=auxiliary_gate,
+            )
         record_timing("kg_action_transition_gate", timer)
         detail["modules"]["kg_action_transition"] = action_transition_result
         kg_location_resolution["action_transition_gate_decision"] = (
@@ -355,10 +371,18 @@ class LPLHAgent:
             detail["modules"]["kg_map"]["room_info"] = self.kg_map.get_current_room_info()
             detail["modules"]["kg_map"]["kg_map_context"] = self.kg_map.to_prompt_string()
         timer = time.perf_counter()
-        inventory_reconciliation = self._apply_gate_inventory_update(
-            auxiliary_gate=auxiliary_gate,
-            inventory_before=inventory_before,
-        )
+        if pure_rejection:
+            inventory_reconciliation = self._skipped_module_result(
+                "inventory_reconciliation",
+                "skipped_pure_rejection",
+            )
+            inventory_reconciliation["before"] = list(self.kg_map.inventory)
+            inventory_reconciliation["after"] = list(self.kg_map.inventory)
+        else:
+            inventory_reconciliation = self._apply_gate_inventory_update(
+                auxiliary_gate=auxiliary_gate,
+                inventory_before=inventory_before,
+            )
         record_timing("inventory_reconciliation", timer)
         detail["modules"]["inventory_reconciliation"] = inventory_reconciliation
         if inventory_reconciliation.get("applied"):
@@ -367,9 +391,15 @@ class LPLHAgent:
             detail["modules"]["kg_map"]["kg_map_context"] = self.kg_map.to_prompt_string()
 
         timer = time.perf_counter()
-        world_state_extraction = self._apply_gate_world_state_update(
-            auxiliary_gate=auxiliary_gate,
-        )
+        if pure_rejection:
+            world_state_extraction = self._skipped_module_result(
+                "world_state_extraction",
+                "skipped_pure_rejection",
+            )
+        else:
+            world_state_extraction = self._apply_gate_world_state_update(
+                auxiliary_gate=auxiliary_gate,
+            )
         record_timing("world_state_extraction", timer)
         detail["modules"]["world_state_extraction"] = world_state_extraction
         if world_state_extraction.get("applied"):
@@ -379,7 +409,15 @@ class LPLHAgent:
         environmental_change_detection = (
             auxiliary_gate.get("environmental_change_detection") or {}
         )
-        if auxiliary_gate.get("use_legacy_environmental_detection"):
+        if pure_rejection:
+            environmental_change_detection = {
+                "status": "skipped_pure_rejection",
+                "environmental_change": False,
+                "evidence": "",
+                "source": "pure_rejection_skip",
+            }
+            module_timings["legacy_environmental_detection"] = 0.0
+        elif auxiliary_gate.get("use_legacy_environmental_detection"):
             timer = time.perf_counter()
             environmental_change_detection = self._detect_environmental_change_with_llm(
                 action=completed_action,
@@ -393,31 +431,46 @@ class LPLHAgent:
         detail["modules"]["environmental_change_detection"] = environmental_change_detection
 
         timer = time.perf_counter()
-        situation_resolution = self._resolve_stored_situations(
-            action=completed_action,
-            observation=observation,
-            score=score,
-            reward_change=reward_change,
-            action_valid=action_valid,
-            prev_location=prev_location,
-            environmental_change=environmental_change_detection,
-        )
-        if (auxiliary_gate.get("decision", {})
-                .get("stored_situation_detection", {})
-                .get("run", True)):
-            situation_detail = self._detect_and_store_situation(
-                action=completed_action,
-                observation=observation,
-                just_resolved=situation_resolution.get("removed_situations", []),
-            )
-        else:
+        if pure_rejection:
+            situation_resolution = {
+                "status": "skipped_pure_rejection",
+                "removed_situations": [],
+                "reason": "latest command was a clear parser/world rejection",
+            }
             situation_detail = self._skipped_situation_detection_result(
                 action=completed_action,
-                just_resolved=situation_resolution.get("removed_situations", []),
-                gate_decision=auxiliary_gate.get("decision", {}).get(
-                    "stored_situation_detection", {}
-                ),
+                just_resolved=[],
+                gate_decision={
+                    "run": False,
+                    "reason": "latest command was a clear parser/world rejection",
+                },
             )
+        else:
+            situation_resolution = self._resolve_stored_situations(
+                action=completed_action,
+                observation=observation,
+                score=score,
+                reward_change=reward_change,
+                action_valid=action_valid,
+                prev_location=prev_location,
+                environmental_change=environmental_change_detection,
+            )
+            if (auxiliary_gate.get("decision", {})
+                    .get("stored_situation_detection", {})
+                    .get("run", True)):
+                situation_detail = self._detect_and_store_situation(
+                    action=completed_action,
+                    observation=observation,
+                    just_resolved=situation_resolution.get("removed_situations", []),
+                )
+            else:
+                situation_detail = self._skipped_situation_detection_result(
+                    action=completed_action,
+                    just_resolved=situation_resolution.get("removed_situations", []),
+                    gate_decision=auxiliary_gate.get("decision", {}).get(
+                        "stored_situation_detection", {}
+                    ),
+                )
         situation_detail["resolution"] = situation_resolution
         situation_detail["active_situations_after"] = self.situation_memory.active_situations()
         detail["modules"]["situation_memory"] = situation_detail
@@ -532,7 +585,7 @@ class LPLHAgent:
         neutral_summaries = []
         neutral_summaries_skipped = []
         neutral_event_keys = []
-        if reward_change == 0 and not done:
+        if reward_change == 0 and not done and not pure_rejection:
             neutral_triggers = self._detect_neutral_triggers(
                 observation=observation,
                 action_valid=action_valid,
@@ -666,85 +719,15 @@ class LPLHAgent:
                     logger.warning(f"Neutral experience failed ({trigger_type}): {e}")
         record_timing("experience_summary_and_storage", timer)
 
-        timer = time.perf_counter()
-        action_failure_memory = {
-            "status": "not_applicable",
-            "source_location": prev_location or self.kg_map.current_location or "unknown",
-            "command": completed_action,
-            "stored_failure": None,
-            "removed_failure": None,
-            "known_failures_here_after": [],
-            "world_signature": {},
-            "failure_reason_prompt": "",
-            "failure_reason_raw_response": "",
-            "error": "",
-        }
-
+        source_location_for_attempt = prev_location or self.kg_map.current_location or "unknown"
         if action_valid is True:
             self.consecutive_failures = 0
             self.recent_failed_actions = []
-            removed_failure = self.failed_action_memory.remove(
-                action_failure_memory["source_location"],
-                completed_action,
-            )
-            if removed_failure:
-                action_failure_memory["status"] = "removed_after_success"
-                action_failure_memory["removed_failure"] = removed_failure
-            else:
-                action_failure_memory["status"] = "valid_no_prior_failure"
         elif action_valid is False:
             self.consecutive_failures += 1
             self.recent_failed_actions.append(completed_action)
             if len(self.recent_failed_actions) > 5:
                 self.recent_failed_actions = self.recent_failed_actions[-5:]
-            failure_location = action_failure_memory["source_location"]
-            world_signature = self._world_signature(failure_location, score)
-            action_failure_memory["world_signature"] = world_signature
-            fallback_reason = self._fallback_failure_reason(observation)
-            failure_reason = fallback_reason
-            try:
-                reason = self.llm.explain_action_failure(
-                    location=failure_location,
-                    command=completed_action,
-                    observation=observation,
-                    world_signature=world_signature,
-                )
-                action_failure_memory["failure_reason_prompt"] = (
-                    self.llm.last_failure_reason_prompt or ""
-                )
-                action_failure_memory["failure_reason_raw_response"] = (
-                    self.llm.last_failure_reason_raw_response or ""
-                )
-                if reason:
-                    failure_reason = reason
-            except Exception as e:
-                logger.warning(f"Action failure explanation failed: {e}")
-                action_failure_memory["error"] = str(e)
-                action_failure_memory["failure_reason_prompt"] = (
-                    self.llm.last_failure_reason_prompt or ""
-                )
-                action_failure_memory["failure_reason_raw_response"] = (
-                    self.llm.last_failure_reason_raw_response or ""
-                )
-            failure_status, failure_record = self.failed_action_memory.record(
-                location=failure_location,
-                command=completed_action,
-                observation=observation,
-                failure_reason=failure_reason,
-                world_signature=world_signature,
-            )
-            action_failure_memory["status"] = failure_status
-            action_failure_memory["stored_failure"] = failure_record
-        elif action_valid is not None:
-            action_failure_memory["status"] = "validation_unknown"
-
-        action_failure_memory["known_failures_here_after"] = (
-            self.failed_action_memory.records_for_location(
-                action_failure_memory["source_location"]
-            )
-        )
-        detail["modules"]["action_failure_memory"] = action_failure_memory
-        record_timing("action_failure_memory", timer)
 
         timer = time.perf_counter()
         location_changed_for_affordance = (
@@ -754,7 +737,7 @@ class LPLHAgent:
         )
         inventory_changed_for_repetition = set(self.kg_map.inventory) != inventory_before
         if not source_state_snapshot:
-            source_location = action_failure_memory["source_location"]
+            source_location = source_location_for_attempt
             source_state_snapshot = self._repetition_state_snapshot(
                 location=source_location,
                 observation=source_generation.get("observation_at_generation", ""),
@@ -787,7 +770,7 @@ class LPLHAgent:
         }
         source_memory_location = source_state_snapshot.get(
             "location",
-            action_failure_memory["source_location"],
+            source_location_for_attempt,
         )
         progress_was_useful = bool(
             reward_change != 0
@@ -798,11 +781,7 @@ class LPLHAgent:
         )
 
         if action_valid is False:
-            failure_record = action_failure_memory.get("stored_failure") or {}
-            failure_reason = (
-                failure_record.get("failure_reason")
-                or self._fallback_failure_reason(observation)
-            )
+            failure_reason = self._fallback_failure_reason(observation)
             stored, repetition_record = self.state_action_memory.record(
                 state_snapshot=source_state_snapshot,
                 command=completed_action,
@@ -1152,7 +1131,7 @@ class LPLHAgent:
         same_state_tried_context = self.state_action_memory.format_for_prompt(
             current_state_snapshot
         )
-        known_failed_here = self.failed_action_memory.format_for_prompt(
+        problem_attempts_here = self.attempt_ledger.format_problem_attempts_for_prompt(
             self.kg_map.current_location or "unknown"
         )
         retrieval_started = time.perf_counter()
@@ -1175,7 +1154,7 @@ class LPLHAgent:
             current_objects_with_state=current_objects_with_state,
             stored_situations=self.situation_memory.active_situations(),
             action_space_context=action_space_context,
-            known_failed_here=known_failed_here,
+            problem_attempts_here=problem_attempts_here,
             command_history_context=command_history_context,
             same_state_tried_commands=same_state_tried_commands,
             experiences=experiences,
@@ -1198,7 +1177,7 @@ class LPLHAgent:
             experiences=experiences,
             stored_situations=stored_situations,
             brainstormed_command_ideas=brainstormed_command_ideas,
-            known_failed_commands_here=known_failed_here,
+            known_failed_commands_here=problem_attempts_here,
             command_history_here=command_history_context,
             same_state_tried_commands=same_state_tried_context,
             history=self._format_history(),
@@ -1247,7 +1226,7 @@ class LPLHAgent:
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
             "affordance_agenda": brainstormed_command_ideas,
-            "known_failed_commands_here": known_failed_here,
+            "problem_attempts_here": problem_attempts_here,
             "command_history_here": command_history_context,
             "same_state_tried_commands": same_state_tried_context,
             "same_state_tried_command_list": same_state_tried_commands,
@@ -1268,7 +1247,7 @@ class LPLHAgent:
                                 current_objects_with_state: list,
                                 stored_situations: list,
                                 action_space_context: str,
-                                known_failed_here: str,
+                                problem_attempts_here: str,
                                 command_history_context: str,
                                 same_state_tried_commands: list[str],
                                 experiences: str,
@@ -1278,7 +1257,7 @@ class LPLHAgent:
         """Run LPLH2 affordance brainstorming for the next action prompt."""
         failure_context = self.affordance_brainstormer.failure_context(
             recent_failed_commands=self.recent_failed_actions,
-            known_failed_commands_here=known_failed_here,
+            known_failed_commands_here=problem_attempts_here,
         )
         state_signature = self.affordance_brainstormer.state_signature(
             location=self.kg_map.current_location or "unknown",
@@ -1308,7 +1287,7 @@ class LPLHAgent:
         same_state_records = self.state_action_memory.records_for_state(
             same_state_snapshot
         )
-        failed_records_here = self.failed_action_memory.records_for_location(
+        failed_records_here = self.attempt_ledger.problem_attempts_for_location(
             self.kg_map.current_location or "unknown"
         )
         attempt_counts_here = self.attempt_ledger.counts_for_location(
@@ -1326,7 +1305,7 @@ class LPLHAgent:
             "visible_object_names": list(current_objects or []),
             "inventory": list(self.kg_map.inventory),
             "recent_failed_commands": list(self.recent_failed_actions),
-            "known_failed_commands_here": known_failed_here,
+            "problem_attempts_here": problem_attempts_here,
             "command_history_context": command_history_context,
             "recent_command_outcomes": recent_command_outcomes,
             "failed_commands": filtered_commands,
@@ -1411,7 +1390,7 @@ class LPLHAgent:
                 visible_objects=result["visible_objects"],
                 inventory=result["inventory"],
                 recent_failed_commands=result["recent_failed_commands"],
-                known_failed_commands_here=known_failed_here,
+                known_failed_commands_here=problem_attempts_here,
                 command_history_here=command_history_context,
                 recent_command_outcomes=recent_command_outcomes,
                 failed_command_verbs=result["failed_command_verbs"],
@@ -1496,7 +1475,7 @@ class LPLHAgent:
         same_state_tried_commands = self.state_action_memory.commands_for_state(
             current_state_snapshot
         )
-        known_failed_here = self.failed_action_memory.format_for_prompt(location)
+        problem_attempts_here = self.attempt_ledger.format_problem_attempts_for_prompt(location)
         recent_command_outcomes = self._recent_same_location_outcomes(location)
         recent_failed_for_gate = list(self.recent_failed_actions)
         if action_valid is False and action:
@@ -1509,7 +1488,7 @@ class LPLHAgent:
         )
         failure_context = self.affordance_brainstormer.failure_context(
             recent_failed_commands=recent_failed_for_gate,
-            known_failed_commands_here=known_failed_here,
+            known_failed_commands_here=problem_attempts_here,
         )
         cached_affordance_ideas = self.affordance_brainstormer.cached_ideas_for_state(
             location=location,
@@ -1547,7 +1526,7 @@ class LPLHAgent:
             "inventory": list(self.kg_map.inventory),
             "active_situations": self.situation_memory.active_situations(),
             "recent_failed_commands": recent_failed_for_gate,
-            "known_failed_commands_here": known_failed_here,
+            "problem_attempts_here": problem_attempts_here,
             "recent_command_outcomes": recent_command_outcomes,
             "same_state_tried_commands": same_state_tried_commands,
             "action_transition_candidate": action_transition_candidate,
@@ -1578,7 +1557,7 @@ class LPLHAgent:
                 visible_objects=visible_objects,
                 active_situations=result["active_situations"],
                 recent_failed_commands=recent_failed_for_gate,
-                known_failed_commands_here=known_failed_here,
+                known_failed_commands_here=problem_attempts_here,
                 recent_command_outcomes=recent_command_outcomes,
                 same_state_tried_commands=same_state_tried_commands,
                 action_transition_candidate=action_transition_candidate,
@@ -1908,27 +1887,66 @@ class LPLHAgent:
 
     def _normalize_auxiliary_gate_decision(self, parsed: dict, action: str,
                                            action_valid, observation: str = "") -> dict:
+        parsed = parsed if isinstance(parsed, dict) else {}
+        note = self._clean_text(parsed.get("note", ""))
+        focus = parsed.get("focus", [])
+        if not isinstance(focus, list):
+            focus = [str(focus)]
+        compact_outcome = parsed.get("outcome")
+        command_outcome_raw = parsed.get("command_outcome", {})
+        if compact_outcome and not command_outcome_raw:
+            command_outcome_raw = {
+                "status": compact_outcome,
+                "reason": note,
+            }
         command_outcome = self._normalize_command_outcome(
-            parsed.get("command_outcome", {}),
+            command_outcome_raw,
             action_valid=action_valid,
         )
         summary_raw = parsed.get("summary_triggers", {})
+        compact_summary = parsed.get("summary", [])
+        if not isinstance(compact_summary, list):
+            compact_summary = []
+        compact_summary_set = {
+            self._normalize_event_piece(item) for item in compact_summary
+        }
         if not isinstance(summary_raw, dict):
             summary_raw = {}
 
         navigation_summary = self._normalize_gate_summary_trigger(
-            summary_raw.get("navigation", parsed.get("navigation", {})),
+            summary_raw.get(
+                "navigation",
+                parsed.get(
+                    "navigation",
+                    {"run": "navigation" in compact_summary_set, "evidence": note}
+                    if compact_summary_set else {},
+                ),
+            ),
             default_run=False,
         )
         env_summary = self._normalize_gate_summary_trigger(
             summary_raw.get(
                 "environmental",
-                summary_raw.get("environmental_change", parsed.get("environmental_change", {})),
+                summary_raw.get(
+                    "environmental_change",
+                    parsed.get(
+                        "environmental_change",
+                        {"run": "environmental" in compact_summary_set, "evidence": note}
+                        if compact_summary_set else {},
+                    ),
+                ),
             ),
             default_run=False,
         )
         narrative_summary = self._normalize_gate_summary_trigger(
-            summary_raw.get("narrative", parsed.get("narrative", {})),
+            summary_raw.get(
+                "narrative",
+                parsed.get(
+                    "narrative",
+                    {"run": "narrative" in compact_summary_set, "evidence": note}
+                    if compact_summary_set else {},
+                ),
+            ),
             default_run=False,
         )
 
@@ -1941,13 +1959,25 @@ class LPLHAgent:
 
         situation_raw = parsed.get(
             "stored_situation_detection",
-            parsed.get("situation_detection", {}),
+            parsed.get(
+                "situation_detection",
+                {"run": parsed.get("situation"), "reason": note, "focus": focus}
+                if "situation" in parsed else {},
+            ),
         )
-        affordance_raw = parsed.get("affordance_brainstorming", {})
+        affordance_raw = parsed.get(
+            "affordance_brainstorming",
+            {"run": parsed.get("brainstorm"), "reason": note, "focus": focus}
+            if "brainstorm" in parsed else {},
+        )
         inventory_route = self._normalize_gate_run_decision(
             parsed.get(
                 "inventory_reconciliation",
-                parsed.get("inventory_update", {}),
+                parsed.get(
+                    "inventory_update",
+                    {"run": parsed.get("inventory"), "reason": note, "focus": focus}
+                    if "inventory" in parsed else {},
+                ),
             ),
             default_run=False,
         )
@@ -1980,17 +2010,105 @@ class LPLHAgent:
             "world_state_extraction": self._normalize_gate_run_decision(
                 parsed.get(
                     "world_state_extraction",
-                    parsed.get("object_state_extraction", {}),
+                    parsed.get(
+                        "object_state_extraction",
+                        {"run": parsed.get("world_state"), "reason": note, "focus": focus}
+                        if "world_state" in parsed else {},
+                    ),
                 ),
                 default_run=False,
             ),
             "kg_action_transition": self._normalize_gate_transition_decision(
-                parsed.get("kg_action_transition", parsed.get("action_transition", {}))
+                parsed.get(
+                    "kg_action_transition",
+                    parsed.get(
+                        "action_transition",
+                        {"record": parsed.get("transition"), "reason": note}
+                        if "transition" in parsed else {},
+                    ),
+                )
             ),
             "inventory_update": self._normalize_gate_inventory_update(
                 parsed.get("inventory_update", {}),
             ),
         }
+
+    def _skipped_module_result(self, module_name: str, status: str) -> dict:
+        return {
+            "status": status,
+            "module": module_name,
+            "applied": False,
+            "reason": "latest command was a clear parser/world rejection",
+            "prompt": "",
+            "llm_raw_response": "",
+            "finish_reason": "",
+            "response_body": "",
+            "error": "",
+        }
+
+    def _is_pure_rejected_observation(self, action_valid, observation: str) -> bool:
+        """Conservative cost gate for rejections with no extractable state.
+
+        This never decides gameplay. It only avoids auxiliary extraction calls
+        on observations that simply say the command/parser/world rejected the
+        command. Mixed or informative failures are allowed through.
+        """
+        if action_valid is not False:
+            return False
+        text = self._normalize_event_piece(observation)
+        if not text:
+            return False
+
+        informative_markers = (
+            "but ",
+            "however",
+            "revealed",
+            "appears",
+            "opens",
+            "closes",
+            "locked",
+            "unlocked",
+            "already have",
+            "you already have",
+            "you don t have",
+            "you don't have",
+            "you do not have",
+            "taken",
+            "dropped",
+            "inventory",
+            "too heavy",
+            "noticed",
+            "notice",
+            "pitch black",
+            "grue",
+            "dark",
+            "score",
+        )
+        if any(marker in text for marker in informative_markers):
+            return False
+
+        pure_rejection_markers = (
+            "i don t know the word",
+            "i don't know the word",
+            "i do not know the word",
+            "you used the word",
+            "in a way that i don't understand",
+            "in a way that i don t understand",
+            "you can t see any",
+            "you can't see any",
+            "you cannot see any",
+            "you can t go that way",
+            "you can't go that way",
+            "you cannot go that way",
+            "there is no way to go",
+            "that sentence isn't one i recognize",
+            "that sentence isn t one i recognize",
+            "that sentence is not one i recognize",
+            "i don't understand that sentence",
+            "i don t understand that sentence",
+            "i do not understand that sentence",
+        )
+        return any(marker in text for marker in pure_rejection_markers)
 
     def _repair_inventory_route_if_needed(self, route: dict, action: str,
                                           command_outcome: dict,
@@ -3297,7 +3415,6 @@ class LPLHAgent:
             "actions_learned": self.action_space.num_actions(),
             "experiences_stored": self.experience_lib.num_experiences(),
             "situations_stored": len(self.situation_memory.active_situations()),
-            "failed_action_memory": self.failed_action_memory.to_dict(),
             "attempt_ledger": self.attempt_ledger.to_dict(),
             "current_location": self.kg_map.current_location,
         }

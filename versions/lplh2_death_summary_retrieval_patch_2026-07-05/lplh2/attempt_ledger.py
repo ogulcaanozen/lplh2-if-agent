@@ -197,6 +197,44 @@ class AttemptLedger:
         lines.append("Never tried from this room: any command not listed above.")
         return "\n".join(lines)
 
+    def problem_attempts_for_location(self, location: str,
+                                      max_items: int = 8) -> list[dict[str, Any]]:
+        """Return compact invalid/unproductive attempts for prompt context.
+
+        This replaces the older failed-command memory: the ledger is factual
+        and does not ask an extra LLM to restate why a command failed.
+        """
+        loc_key = normalize_location_key(location) or "unknown"
+        records = [
+            record for key, record in self._records.items()
+            if key.startswith(f"{loc_key}|")
+        ]
+        output: list[dict[str, Any]] = []
+        for record in records:
+            outcomes = record.get("outcomes", {}) or {}
+            if not (
+                int(outcomes.get("invalid", 0) or 0)
+                or int(outcomes.get("unproductive", 0) or 0)
+            ):
+                continue
+            entry = {
+                "command": record.get("command", ""),
+                "count": int(record.get("count", 0) or 0),
+                "outcome": clean_text(record.get("last_outcome", ""))[:160],
+                "last_observation": clean_text(record.get("last_observation", ""))[:160],
+                "last_step": int(record.get("last_step", 0) or 0),
+            }
+            output.append(entry)
+        output.sort(key=lambda item: (-int(item.get("last_step", 0)), -int(item.get("count", 0))))
+        return output[:max_items]
+
+    def format_problem_attempts_for_prompt(self, location: str,
+                                           max_items: int = 8) -> str:
+        records = self.problem_attempts_for_location(location, max_items=max_items)
+        if not records:
+            return "[]"
+        return json.dumps(records, ensure_ascii=False)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "records": [self._public_record(record) for record in self._records.values()],

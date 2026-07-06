@@ -16,6 +16,9 @@ New in this version:
 - epoch/step staleness headers for retrieved experiences,
 - score-gain summary dedup across epochs via the Chroma-independent event index,
 - retrieval over-fetching with a small diversity selector,
+- compact auxiliary-gate output routing,
+- pure parser/world rejections skip expensive extraction modules,
+- failed-command memory removed in favor of the factual attempt ledger,
 - KG/world-state reliability fixes from the July 3 snapshot.
 
 It intentionally does not hard-ban repeated commands and does not include the
@@ -25,7 +28,7 @@ This repo contains the `lplh2` package and the Colab experiment notebook used fo
 
 ## Contents
 
-- `lplh2/` - agent, KG map, action space, experience library, stored-situation memory, affordance brainstorming, attempt ledger, failed-action memory, and prompts.
+- `lplh2/` - agent, KG map, action space, experience library, stored-situation memory, affordance brainstorming, attempt ledger, same-state repetition memory, and prompts.
 - `lplh2/run_zork1_lplh2_smoke_colab.ipynb` - Colab experiment notebook.
 - `requirements.txt` - Python dependencies used by local/Colab runs.
 
@@ -55,7 +58,7 @@ The notebook can also accept ROMs under `IFGames/games/` depending on the config
 
 - Main action LLM: usually `Qwen/Qwen2.5-14B-Instruct` in Colab.
 - FM model: `Qwen/Qwen2.5-1.5B-Instruct` plus the LoRA adapter for validation, relation extraction, and action splitting.
-- Auxiliary LLM: local `Qwen/Qwen2.5-14B-Instruct` fallback for summaries, situation memory, environmental-change detection, failed-command reasoning, and repetition evaluation.
+- Auxiliary LLM: local `Qwen/Qwen2.5-14B-Instruct` fallback for summaries, situation memory, environmental-change detection, compact gating, inventory/world-state extraction, and repetition evaluation.
 - Affordance brainstorming: local `Qwen/Qwen2.5-14B-Instruct` fallback via empty `LPLH_BRAINSTORM_MODEL`.
 
 ## Notes

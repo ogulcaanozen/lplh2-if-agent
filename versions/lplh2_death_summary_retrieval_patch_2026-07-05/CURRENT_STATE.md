@@ -28,6 +28,9 @@ versions/lplh2_attempt_ledger_agenda_patch_2026-07-04
 - Score-gain summary dedup across epochs.
 - Epoch/step staleness headers for retrieved experiences.
 - Retrieval over-fetching and diversity selection.
+- Compact auxiliary-gate output routing.
+- Expensive extraction modules skipped for clear parser/world rejections.
+- Legacy separate failure memory removed; attempt ledger is the factual attempt source.
 
 ## Not Included
 
@@ -55,7 +58,6 @@ Each experiment folder should include:
 - `summary_module_log.txt`
 - `situation_memory_log.txt`
 - `affordance_brainstorm_log.txt`
-- `action_failure_memory_log.txt`
 - `action_generation_log.txt`
 - `attempt_ledger_log.txt`
 - `auxiliary_gate_log.txt`

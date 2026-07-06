@@ -534,6 +534,9 @@ class AffordanceBrainstormer:
             result = (
                 record.get("result_observation")
                 or record.get("observation")
+                or record.get("last_observation")
+                or record.get("last_outcome")
+                or record.get("outcome")
                 or record.get("failure_reason")
                 or record.get("reason")
                 or ""
@@ -547,6 +550,8 @@ class AffordanceBrainstormer:
                 entry["reason"] = self._clean_field(record.get("reason"))[:180]
             if record.get("failure_reason"):
                 entry["reason"] = self._clean_field(record.get("failure_reason"))[:180]
+            if record.get("outcome") and not entry.get("reason"):
+                entry["reason"] = self._clean_field(record.get("outcome"))[:180]
             if record.get("location"):
                 entry["location"] = self._clean_field(record.get("location"))
             entries.append(entry)

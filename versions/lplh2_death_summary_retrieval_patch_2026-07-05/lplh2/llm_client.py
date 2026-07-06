@@ -30,7 +30,6 @@ from .prompts import (
     STORED_SITUATION_DETECTION_PROMPT,
     STORED_SITUATION_RESOLUTION_PROMPT,
     AFFORDANCE_BRAINSTORMING_PROMPT,
-    ACTION_FAILURE_REASON_PROMPT,
     ACTION_REPETITION_EVALUATION_PROMPT,
 )
 
@@ -119,9 +118,6 @@ class LLMClient:
         self.last_affordance_prompt = None
         self.last_affordance_raw_response = None
         self.last_affordance_finish_reason = None
-        self.last_failure_reason_prompt = None
-        self.last_failure_reason_raw_response = None
-        self.last_failure_reason_finish_reason = None
         self.last_repetition_eval_prompt = None
         self.last_repetition_eval_raw_response = None
         self.last_repetition_eval_finish_reason = None
@@ -563,16 +559,16 @@ class LLMClient:
         if self._es_client and config.LLM_ES_MODEL:
             response, finish_reason = self._chat_es_json(
                 prompt,
-                max_completion_tokens=1024,
+                max_completion_tokens=512,
                 retry_instruction=(
                     "The previous response was empty or truncated. Return only the "
                     "required |start|...|end| JSON object. Do not explain."
                 ),
-                retry_tokens=1024,
+                retry_tokens=512,
             )
             self.last_auxiliary_gate_finish_reason = finish_reason
         else:
-            response = self._chat_aux_fallback(prompt, max_new_tokens=1024)
+            response = self._chat_aux_fallback(prompt, max_new_tokens=512)
             self.last_auxiliary_gate_finish_reason = "llm_a_qwen14b"
 
         self.last_auxiliary_gate_raw_response = response
@@ -724,46 +720,6 @@ class LLMClient:
         self.last_affordance_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
         return m.group(1).strip() if m else response.strip()
-
-    def explain_action_failure(self, location: str, command: str,
-                               observation: str, world_signature: dict) -> str:
-        """Write a short free-text reason for a failed command."""
-        prompt = ACTION_FAILURE_REASON_PROMPT.format(
-            location=location or "unknown",
-            command=command or "",
-            observation=observation or "",
-            world_signature=json.dumps(world_signature or {}, ensure_ascii=False),
-        )
-
-        self.last_failure_reason_prompt = prompt
-        self.last_failure_reason_raw_response = None
-        self.last_failure_reason_finish_reason = None
-        if self._es_client and config.LLM_ES_MODEL:
-            response, finish_reason = self._chat_es_json(
-                prompt,
-                max_completion_tokens=768,
-                retry_instruction=(
-                    "The previous response was empty or truncated. Return only the required "
-                    "|start|...|end| JSON object. Do not explain."
-                ),
-                retry_tokens=768,
-            )
-            self.last_failure_reason_finish_reason = finish_reason
-        else:
-            response = self._chat_aux_fallback(prompt, max_new_tokens=768)
-            self.last_failure_reason_finish_reason = "llm_a_qwen14b"
-
-        self.last_failure_reason_raw_response = response
-        m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
-        body = m.group(1).strip() if m else response.strip()
-        try:
-            parsed = json.loads(body)
-            reason = parsed.get("failure_reason", "")
-            if reason:
-                return re.sub(r"\s+", " ", str(reason)).strip()
-        except Exception:
-            pass
-        return re.sub(r"\s+", " ", body).strip()
 
     def evaluate_action_repetition(self, state_snapshot: dict, command: str,
                                    observation: str, progress_signals: dict) -> str:
