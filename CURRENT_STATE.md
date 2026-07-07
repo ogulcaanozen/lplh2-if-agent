@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-26
+Last updated: 2026-07-07
 
 This file is a handoff note for continuing the LPLH2 research project from another computer or a fresh Codex session.
 
@@ -11,6 +11,8 @@ This public repo contains the portable LPLH2 code and Colab notebook:
 - `lplh2/` - the LPLH2 agent package.
 - `lplh2/run_zork1_lplh2_smoke_colab.ipynb` - current Colab experiment notebook.
 - `requirements.txt` - dependency list.
+- `versions/lplh2_grounded_memory_retrieval_patch_2026-07-07/` - current
+  experiment snapshot used by the notebook.
 
 This repo intentionally excludes:
 
@@ -43,6 +45,12 @@ is intentionally empty, so auxiliary modules use the local main LLM
 (`Qwen/Qwen2.5-14B-Instruct`) instead of `o3-mini`.
 
 ## Current Runtime Design
+
+The current notebook pulls code from:
+
+```text
+versions/lplh2_grounded_memory_retrieval_patch_2026-07-07
+```
 
 Main LPLH2 modules:
 
@@ -85,6 +93,23 @@ Important LPLH2 fixes already applied:
   - shows same-state tried commands to the main action LLM,
   - filters exact same-state repeats out of brainstorm suggestions,
   - does not hard-block the main LLM.
+- Grounded score summaries:
+  - exact `scoring_action`, scoring location, location-after, reward, epoch,
+    and step are passed as authoritative fields,
+  - positive-score summaries are retried/prefixed if they omit the exact
+    scoring command/location.
+- Grounded death summaries:
+  - exact `fatal_action`, issue location, and after-loss location are explicit,
+  - unsafe-condition evidence is quote-grounded rather than game-specific.
+- Dynamic experience retrieval cap:
+  - nearby unearned achievements, relevant death warnings, and object-anchored
+    mechanics outrank redundant route memories,
+  - achievements already re-earned in the current epoch are not shown as active
+    reward targets.
+- Existing affordance agenda carryover now persists still-relevant pending
+  ideas across compact state changes.
+- KG location updates are movement-confirmed, and same-title rooms can split by
+  description fingerprint.
 
 ## Current Known Problem
 
