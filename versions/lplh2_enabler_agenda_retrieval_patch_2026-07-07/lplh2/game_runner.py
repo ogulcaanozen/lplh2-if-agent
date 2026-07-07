@@ -1167,7 +1167,7 @@ class GameRunner:
         self._affordance_log_file.write(
             json.dumps(entry.get("active_situations", []), indent=2, ensure_ascii=False)
         )
-        self._affordance_log_file.write("\n\nlearned action space supplied to brainstorm:\n")
+        self._affordance_log_file.write("\n\nlearned action space supplied to brainstorm (disabled):\n")
         self._affordance_log_file.write(str(entry.get("action_space_context", "")))
         self._affordance_log_file.write("\n\ncommand history supplied to brainstorm:\n")
         self._affordance_log_file.write(str(entry.get("command_history_context", "")))

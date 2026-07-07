@@ -1248,7 +1248,7 @@ You are brainstorming possible commands for a text-based interactive fiction gam
 
 You are NOT choosing the final next action. Your job is to propose a small set of concrete parser-friendly commands that a skilled player would consider trying next.
 
-The final action selector will receive your suggestions along with the map, action space, memories, and current observation.
+The final action selector will receive your suggestions along with the map, memories, learned action space, and current observation.
 
 This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should run and produce ideas even when there are no active stored situations. Stored situations are only extra context that may suggest additional useful commands. When recent same-location command outcomes show that normal interaction is being distorted, blocked, obscured, or mismatched by a persistent condition, also brainstorm condition-level commands.
 
@@ -1276,7 +1276,6 @@ This is primarily LOCAL OBJECT AND INVENTORY AFFORDANCE brainstorming. It should
   - "commands_to_try": concrete game commands to try.
 - Do not include priority, confidence, why_it_matters, when_to_stop, or long explanations.
 - Use simple canonical commands that IF parsers usually understand.
-- You may suggest useful verbs that are not in the learned action space.
 - Do suggest interactions for newly observed objects even if no stored situation exists. Example: a visible rug can suggest "move rug", "lift rug", and "look under rug".
 - Use object state when proposing commands. Avoid commands whose main purpose is to create a state that the object already has.
 - Do not propose acquiring an object already listed in Inventory. If an idea's intended state already holds, treat it as completed rather than pending.
@@ -1405,7 +1404,6 @@ Unproductive Commands Here: {unproductive_commands_here}
 Same-State Tried Commands: {same_state_tried_commands}
 Pending Carryover Commands: {pending_carryover_commands}
 Active Stored Situations: {stored_situations}
-Learned Action Space Here: {action_space}
 Retrieved Experiences: {experiences}"""
 
 

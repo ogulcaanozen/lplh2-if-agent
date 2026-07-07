@@ -1321,7 +1321,6 @@ class LPLHAgent:
             current_objects=current_objects,
             current_objects_with_state=current_objects_with_state,
             stored_situations=self.situation_memory.active_situations(),
-            action_space_context=action_space_context,
             known_failed_here=known_failed_here,
             problem_attempts_here=problem_attempts_here,
             command_history_context=command_history_context,
@@ -1462,7 +1461,6 @@ class LPLHAgent:
     def _brainstorm_affordances(self, observation: str, current_objects: list,
                                 current_objects_with_state: list,
                                 stored_situations: list,
-                                action_space_context: str,
                                 known_failed_here: str,
                                 problem_attempts_here: str,
                                 command_history_context: str,
@@ -1547,6 +1545,7 @@ class LPLHAgent:
                 failure_context["failed_verbs"] + ledger_failure_context["failed_verbs"]
             )),
             "active_situations": list(stored_situations or []),
+            "action_space_context": "not_supplied",
             "score": score,
             "state_signature": state_signature,
             "reset_cache": reset_cache,
@@ -1631,7 +1630,6 @@ class LPLHAgent:
                 same_state_tried_commands=list(same_state_tried_commands or []),
                 pending_carryover_commands=result["pending_carryover_commands"],
                 stored_situations=result["active_situations"],
-                action_space=action_space_context,
                 experiences=experiences,
                 score=score,
             )
