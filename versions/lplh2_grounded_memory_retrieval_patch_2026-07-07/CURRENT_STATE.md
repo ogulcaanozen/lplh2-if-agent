@@ -33,6 +33,7 @@ versions/lplh2_death_summary_retrieval_patch_2026-07-05
   not vanish just because the compact state changed.
 - Movement-confirmed KG location updates.
 - Same-title room fingerprinting for repeated room names.
+- Dedicated retrieved-summary logging for every action-generation prompt.
 
 ## Not Included
 
@@ -63,6 +64,7 @@ Each experiment folder should include:
 - `situation_memory_log.txt`
 - `affordance_brainstorm_log.txt`
 - `action_generation_log.txt`
+- `retrieved_summaries_log.txt`
 - `action_failure_memory_log.txt`
 - `attempt_ledger_log.txt`
 - `auxiliary_gate_log.txt`
@@ -71,6 +73,7 @@ Each experiment folder should include:
 - JSON step log
 
 Use `summary_module_log.txt` to audit authoritative score/death summaries,
-`action_generation_log.txt` to inspect selected retrieval headers and agenda
-context, and `kg_location_log.txt` to inspect false-location prevention and
-same-title room splitting.
+`retrieved_summaries_log.txt` to inspect which summaries were selected for
+each action-generation prompt, `action_generation_log.txt` to inspect the full
+main-LLM context and agenda, and `kg_location_log.txt` to inspect
+false-location prevention and same-title room splitting.

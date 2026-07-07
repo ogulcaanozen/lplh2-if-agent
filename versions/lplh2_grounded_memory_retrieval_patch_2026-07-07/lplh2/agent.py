@@ -1354,6 +1354,7 @@ class LPLHAgent:
             "kg_map_context": self.kg_map.to_prompt_string(),
             "action_space_context": action_space_context,
             "retrieved_experiences": experiences,
+            "retrieval_debug": self.last_retrieval_debug,
             "stored_situations_context": stored_situations,
             "brainstormed_command_ideas": brainstormed_command_ideas,
             "affordance_agenda": brainstormed_command_ideas,
