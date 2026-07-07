@@ -402,6 +402,9 @@ class LPLHAgent:
             kg_location_resolution["confirmed_transition"] = (
                 action_transition_result.get("candidate", {})
             )
+            kg_location_resolution["location_after_update"] = self.kg_map.current_location
+            detail["modules"]["kg_map"]["current_location"] = self.kg_map.current_location
+            detail["modules"]["kg_map"]["rooms_visited"] = list(self.kg_map.visited_rooms)
             detail["modules"]["kg_map"]["room_info"] = self.kg_map.get_current_room_info()
             detail["modules"]["kg_map"]["kg_map_context"] = self.kg_map.to_prompt_string()
         timer = time.perf_counter()
@@ -1748,7 +1751,26 @@ class LPLHAgent:
                 "from": prev_location,
                 "command": action,
                 "to": location,
+                "source": "kg_location_change",
             }
+        elif (not self._is_pure_rejected_observation(action_valid, observation)
+              and prev_location
+              and prev_lower not in self.kg_map._direction_set()):
+            room_title = self._extract_observation_room_title(observation)
+            if room_title:
+                current_key = self._normalize_event_piece(location or "")
+                title_key = self._normalize_event_piece(room_title)
+                if title_key and title_key != current_key:
+                    action_transition_candidate = {
+                        "from": prev_location,
+                        "command": action,
+                        "to": room_title,
+                        "source": "observation_room_title",
+                        "evidence": (
+                            f"Observation begins with room title "
+                            f"'{room_title}' while KG location remained '{location}'."
+                        ),
+                    }
 
         result = {
             "status": "not_run",
@@ -2027,6 +2049,14 @@ class LPLHAgent:
             from_location=candidate.get("from", ""),
             action=candidate.get("command", ""),
             to_location=candidate.get("to", ""),
+        )
+        # If KG failed to apply a clear room-title arrival before the aux gate
+        # reviewed it, the approved action transition is also authoritative for
+        # current location. This repairs commands such as "go through window"
+        # whose observation starts with the destination room title.
+        self.kg_map.update(
+            [("You", "in", candidate.get("to", ""))],
+            candidate.get("command", ""),
         )
         result["applied"] = True
         result["status"] = "applied"

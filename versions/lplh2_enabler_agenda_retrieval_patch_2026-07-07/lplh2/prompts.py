@@ -583,6 +583,12 @@ Make exactly these decisions:
      reusable movement caused by the command itself, such as entering through an
      object, climbing into a place, going through a passage/window/portal, or
      otherwise using a non-cardinal action to reach the destination.
+   - If the candidate source is "observation_room_title", decide whether the
+     room title at the start of the observation is the player's new current
+     room. Set "record": true when the action plausibly caused arrival there
+     (for example going through an opening/window/passage, entering, climbing,
+     crawling, crossing, or stepping into a place). Set false if the title is
+     only something seen, inspected, quoted, or mentioned remotely.
    - Set "record": false when there is no candidate, the location changed due
      to death/respawn/teleportation/punishment, a correction of a previously
      wrong location, ordinary directional movement phrased in words, or an
