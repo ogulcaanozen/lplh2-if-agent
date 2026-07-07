@@ -220,6 +220,8 @@ class ExperienceLib:
             return []
         except Exception as e:
             logger.warning(f"ChromaDB structured retrieval failed: {e}")
+            if where:
+                return []
 
         if not self.experiences:
             return []

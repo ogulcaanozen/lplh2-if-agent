@@ -58,6 +58,20 @@ blocked-exit/fingerprint behavior without adding a new planner.
    - Same-title candidates with empty fingerprints adopt a later fingerprint
      instead of creating spurious `#2` rooms.
 
+## Post-review hotfixes
+
+- Affordance exact-state keys drop the observation field before serialization,
+  so observation text can help carryover relevance without fragmenting
+  valid-but-unproductive command memory.
+- Initial-room fingerprint seeding slices the initial observation from the room
+  title before fingerprinting, preventing banner/copyright text from becoming
+  the room fingerprint.
+- Filtered retrieval returns `[]` even when a filtered Chroma query raises an
+  exception, instead of falling back to unrelated recent memories.
+- Current-epoch reward completion is also tracked by `(location, reward)` so
+  achievements/enablers are suppressed when the same reward is re-earned with a
+  wording variant of the original scoring command.
+
 ## Validation
 
 Run from this version folder:

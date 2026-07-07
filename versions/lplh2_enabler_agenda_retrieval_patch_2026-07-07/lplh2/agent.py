@@ -76,6 +76,7 @@ class LPLHAgent:
         self.initial_observation_processed = False
         self.last_retrieval_debug = {}
         self.earned_score_event_keys_this_epoch = set()
+        self.earned_score_location_reward_keys_this_epoch = set()
         self._recent_outcomes = []
 
     def reset(self, keep_experiences: bool = True):
@@ -108,6 +109,7 @@ class LPLHAgent:
         self.initial_observation_processed = False
         self.last_retrieval_debug = {}
         self.earned_score_event_keys_this_epoch = set()
+        self.earned_score_location_reward_keys_this_epoch = set()
         self._recent_outcomes = []
         logger.info(f"Agent reset (keep_experiences={keep_experiences})")
 
@@ -532,6 +534,9 @@ class LPLHAgent:
                         reward_change=reward_change,
                     )
                     self.earned_score_event_keys_this_epoch.add(score_event_key)
+                    self.earned_score_location_reward_keys_this_epoch.add(
+                        self._score_location_reward_key(score_location, reward_change)
+                    )
 
                 if score_event_key and self.experience_lib.event_seen(score_event_key):
                     score_summary_skipped = {
@@ -1165,7 +1170,12 @@ class LPLHAgent:
                 triples = self._with_authoritative_location_triple(triples, room_title)
             self.kg_map.update(triples, "look")
             if room_title:
-                self.kg_map.seed_room_fingerprint(room_title, observation)
+                title_index = observation.lower().find(room_title.lower())
+                seed_observation = (
+                    observation[title_index:]
+                    if title_index >= 0 else observation
+                )
+                self.kg_map.seed_room_fingerprint(room_title, seed_observation)
             print(f"  Initial KG seed: {len(triples)} triple(s) extracted.", flush=True)
             logger.info(f"Initial KG-map seeded with {len(triples)} triples")
         except Exception as e:
@@ -2790,6 +2800,9 @@ class LPLHAgent:
             "earned_score_event_keys_this_epoch": sorted(
                 self.earned_score_event_keys_this_epoch
             ),
+            "earned_score_location_reward_keys_this_epoch": sorted(
+                self.earned_score_location_reward_keys_this_epoch
+            ),
             "candidates": [self._experience_digest(record) for record in records],
             "shown": [self._experience_digest(record) for record in shown],
         }
@@ -2889,12 +2902,35 @@ class LPLHAgent:
     def _achievement_earned_this_epoch(self, record: dict) -> bool:
         metadata = record.get("metadata") or {}
         key = str(metadata.get("event_key") or "")
-        return bool(key and key in self.earned_score_event_keys_this_epoch)
+        if key and key in self.earned_score_event_keys_this_epoch:
+            return True
+        return self._score_location_reward_from_metadata_earned(metadata)
 
     def _enabler_completed_this_epoch(self, record: dict) -> bool:
         metadata = record.get("metadata") or {}
         key = str(metadata.get("enables_event_key") or "")
-        return bool(key and key in self.earned_score_event_keys_this_epoch)
+        if key and key in self.earned_score_event_keys_this_epoch:
+            return True
+        reward = metadata.get("enables_reward")
+        location = metadata.get("enables_location") or metadata.get("location")
+        return self._score_location_reward_earned(location, reward)
+
+    def _score_location_reward_from_metadata_earned(self, metadata: dict) -> bool:
+        reward = metadata.get("score_change")
+        location = (
+            metadata.get("location_issued")
+            or metadata.get("location")
+            or metadata.get("enables_location")
+        )
+        return self._score_location_reward_earned(location, reward)
+
+    def _score_location_reward_earned(self, location, reward) -> bool:
+        try:
+            reward_int = int(reward)
+        except Exception:
+            return False
+        key = self._score_location_reward_key(str(location or ""), reward_int)
+        return bool(key and key in self.earned_score_location_reward_keys_this_epoch)
 
     def _experience_location_relevant(self, record: dict,
                                       include_neighbors: bool = False) -> bool:
@@ -3479,6 +3515,10 @@ class LPLHAgent:
             f"score:v1:{trigger_norm}:{location_norm}:"
             f"{action_norm}:{int(reward_change or 0)}"
         )
+
+    def _score_location_reward_key(self, location: str, reward_change: int) -> str:
+        location_norm = self._normalize_event_piece(location)
+        return f"score_location_reward:v1:{location_norm}:{int(reward_change or 0)}"
 
     def _store_reward_enabler_experiences(self, score_event_key: str,
                                           reward_change: int,

@@ -736,7 +736,9 @@ class AffordanceBrainstormer:
     def _state_key(self, signature: dict[str, Any] | None) -> str:
         if not isinstance(signature, dict):
             return ""
-        return json.dumps(signature, sort_keys=True, ensure_ascii=False)
+        key_signature = dict(signature)
+        key_signature.pop("observation", None)
+        return json.dumps(key_signature, sort_keys=True, ensure_ascii=False)
 
     def _attempt_state_key(self, location: str, signature: dict[str, Any] | None) -> str:
         state_key = self._state_key(signature)
