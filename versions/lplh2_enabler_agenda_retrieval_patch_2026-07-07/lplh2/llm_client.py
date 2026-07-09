@@ -533,7 +533,7 @@ class LLMClient:
 
     def gate_auxiliary_modules(self, location: str, previous_location: str,
                                action: str, action_valid, observation: str,
-                               score: int, reward_change: int,
+                               done: bool, score: int, reward_change: int,
                                rooms_visited_before: list,
                                inventory_before: list,
                                inventory: list, visible_objects: list,
@@ -552,6 +552,7 @@ class LLMClient:
             action=action or "none",
             action_valid=str(action_valid),
             observation=observation or "",
+            done=str(bool(done)),
             score=score,
             reward_change=reward_change,
             rooms_visited_before=json.dumps(rooms_visited_before or [], ensure_ascii=False),

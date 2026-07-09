@@ -338,6 +338,7 @@ class LPLHAgent:
         auxiliary_gate = self._run_auxiliary_gate(
             action=completed_action,
             observation=observation,
+            done=done,
             score=score,
             reward_change=reward_change,
             action_valid=action_valid,
@@ -348,6 +349,15 @@ class LPLHAgent:
         record_timing("auxiliary_gate", timer)
         detail["modules"]["auxiliary_gate"] = auxiliary_gate
         command_outcome = auxiliary_gate.get("decision", {}).get("command_outcome", {})
+        terminal_status = (
+            auxiliary_gate.get("decision", {}).get("terminal_outcome", "none")
+        )
+        is_death = self._classify_death(
+            done=done,
+            reward_change=reward_change,
+            terminal_status=terminal_status,
+            observation=observation,
+        )
         if command_outcome.get("status") == "accepted" and action_valid is not True:
             raw_action_valid = action_valid
             action_valid = True
@@ -521,15 +531,29 @@ class LPLHAgent:
         if experience_triggered:
             try:
                 history_text = self._format_history()
-                score_location = prev_location or self.kg_map.current_location or "unknown"
-                location_after = self.kg_map.current_location or "unknown"
+                score_location = self._first_known_location(
+                    prev_location,
+                    self.kg_map.current_location,
+                    "Starting Location",
+                )
+                location_after = self._first_known_location(
+                    self.kg_map.current_location,
+                    score_location,
+                    "Starting Location",
+                )
                 score_experience_kind = (
-                    "achievement" if reward_change > 0
-                    else "death_warning" if reward_change < 0
+                    "death_warning" if is_death
+                    else "achievement" if reward_change > 0
                     else "terminal"
                 )
                 score_event_key = ""
-                if reward_change > 0:
+                death_event_key = ""
+                if is_death:
+                    death_event_key = self._death_event_key(
+                        action=completed_action,
+                        location=score_location,
+                    )
+                elif reward_change > 0:
                     score_event_key = self._score_event_key(
                         trigger="gain",
                         action=completed_action,
@@ -541,11 +565,12 @@ class LPLHAgent:
                         self._score_location_reward_key(score_location, reward_change)
                     )
 
-                if score_event_key and self.experience_lib.event_seen(score_event_key):
+                event_key = death_event_key or score_event_key
+                if event_key and self.experience_lib.event_seen(event_key):
                     score_summary_skipped = {
-                        "trigger": "score_change",
-                        "event_key": score_event_key,
-                        "reason": "duplicate_score_gain",
+                        "trigger": "death" if is_death else "score_change",
+                        "event_key": event_key,
+                        "reason": "duplicate_death_warning" if is_death else "duplicate_score_gain",
                         "kind": score_experience_kind,
                         "epoch": self.current_epoch,
                         "step": self.step_count,
@@ -553,16 +578,20 @@ class LPLHAgent:
                         "current_score": score,
                         "location": score_location,
                         "action": completed_action,
+                        "terminal": done,
+                        "terminal_status": terminal_status,
                     }
                     self.experience_lib.record_event(
-                        score_event_key,
+                        event_key,
                         metadata=score_summary_skipped,
                     )
                     logger.info(
-                        f"Experience skipped as duplicate score gain: {completed_action}"
+                        f"Experience skipped as duplicate {score_experience_kind}: "
+                        f"{completed_action}"
                     )
                 else:
-                    if reward_change < 0:
+                    validation = {}
+                    if is_death:
                         ledger_block = self.attempt_ledger.format_room_block(
                             score_location
                         )
@@ -584,20 +613,21 @@ class LPLHAgent:
                             location_issued=score_location,
                             location_after=location_after,
                         )
-                        exp_summary, validation = self._validate_score_summary(
-                            summary=exp_summary,
-                            history_text=history_text,
-                            reward_change=reward_change,
-                            current_score=score,
-                            scoring_action=completed_action,
-                            location_issued=score_location,
-                            location_after=location_after,
-                        )
+                        if reward_change > 0:
+                            exp_summary, validation = self._validate_score_summary(
+                                summary=exp_summary,
+                                history_text=history_text,
+                                reward_change=reward_change,
+                                current_score=score,
+                                scoring_action=completed_action,
+                                location_issued=score_location,
+                                location_after=location_after,
+                            )
                     experience_summary = exp_summary
                     score_summary_prompt = self.llm.last_summary_prompt or ""
                     score_metadata = {
                         "kind": score_experience_kind,
-                        "trigger": "score_change",
+                        "trigger": "death" if is_death else "score_change",
                         "score_change": reward_change,
                         "current_score": score,
                         "epoch": self.current_epoch,
@@ -606,21 +636,25 @@ class LPLHAgent:
                         "location_issued": score_location,
                         "location_after": location_after,
                         "action": completed_action,
-                        "scoring_action": completed_action if reward_change > 0 else "",
-                        "fatal_action": completed_action if reward_change < 0 else "",
+                        "scoring_action": (
+                            completed_action if reward_change > 0 and not is_death else ""
+                        ),
+                        "fatal_action": completed_action if is_death else "",
                         "terminal": done,
+                        "terminal_status": terminal_status,
+                        "is_death": is_death,
                     }
-                    if reward_change > 0:
+                    if reward_change > 0 and not is_death:
                         score_metadata["summary_validation"] = validation
-                    if score_event_key:
-                        score_metadata["event_key"] = score_event_key
+                    if event_key:
+                        score_metadata["event_key"] = event_key
                     self.experience_lib.store_experience(
                         experience_text=exp_summary,
                         metadata=score_metadata,
                     )
-                    if score_event_key:
+                    if event_key:
                         self.experience_lib.record_event(
-                            score_event_key,
+                            event_key,
                             metadata={
                                 **score_metadata,
                                 "status": "stored",
@@ -628,8 +662,9 @@ class LPLHAgent:
                         )
                     summary_log_entries.append({
                         "state_type": (
-                            "terminal" if done and reward_change == 0
-                            else "score_loss" if reward_change < 0
+                            "score_loss" if is_death and reward_change < 0
+                            else "terminal_defeat" if is_death
+                            else "terminal" if done and reward_change == 0
                             else "score_change"
                         ),
                         "prompt": score_summary_prompt,
@@ -639,7 +674,7 @@ class LPLHAgent:
                     })
                     logger.info(f"Experience stored: score change {reward_change:+d}")
 
-                if reward_change > 0 and score_event_key:
+                if (not is_death) and reward_change > 0 and score_event_key:
                     enabler_entries = self._store_reward_enabler_experiences(
                         score_event_key=score_event_key,
                         reward_change=reward_change,
@@ -1009,6 +1044,7 @@ class LPLHAgent:
             inventory_changed=inventory_changed_for_repetition,
             environment_changed=bool(environmental_change_detection.get("environmental_change")),
             repetition_status=state_repetition_memory.get("status", ""),
+            terminal_defeat=is_death,
             state_key=self._snapshot_key(source_state_snapshot),
             step=self.step_count,
             epoch=self.current_epoch,
@@ -1169,16 +1205,16 @@ class LPLHAgent:
             print("  Initial KG seed: extracting initial room/object facts...", flush=True)
             triples = self.fm.extract_relations("look", observation, max_new=192)
             room_title = self._extract_observation_room_title(observation)
-            if room_title:
-                triples = self._with_authoritative_location_triple(triples, room_title)
+            if not room_title:
+                room_title = "Starting Location"
+            triples = self._with_authoritative_location_triple(triples, room_title)
             self.kg_map.update(triples, "look")
-            if room_title:
-                title_index = observation.lower().find(room_title.lower())
-                seed_observation = (
-                    observation[title_index:]
-                    if title_index >= 0 else observation
-                )
-                self.kg_map.seed_room_fingerprint(room_title, seed_observation)
+            title_index = observation.lower().find(room_title.lower())
+            seed_observation = (
+                observation[title_index:]
+                if title_index >= 0 else observation
+            )
+            self.kg_map.seed_room_fingerprint(room_title, seed_observation)
             print(f"  Initial KG seed: {len(triples)} triple(s) extracted.", flush=True)
             logger.info(f"Initial KG-map seeded with {len(triples)} triples")
         except Exception as e:
@@ -1190,6 +1226,13 @@ class LPLHAgent:
             if str(subj).strip().lower() == "you" and str(rel).strip().lower() == "in":
                 return self._clean_text(obj)
         return ""
+
+    def _first_known_location(self, *candidates: str) -> str:
+        for candidate in candidates:
+            text = self._clean_text(candidate)
+            if text and self._normalize_event_piece(text) != "unknown":
+                return text
+        return "Starting Location"
 
     def _with_authoritative_location_triple(self, triples: list, location: str) -> list:
         """Replace/inject <You, in, location> when the observation title is clear."""
@@ -1688,8 +1731,8 @@ class LPLHAgent:
 
         return result
 
-    def _run_auxiliary_gate(self, action: str, observation: str, score: int,
-                            reward_change: int, action_valid,
+    def _run_auxiliary_gate(self, action: str, observation: str, done: bool,
+                            score: int, reward_change: int, action_valid,
                             prev_location: str,
                             inventory_before: set = None,
                             visited_rooms_before: set = None) -> dict:
@@ -1777,6 +1820,7 @@ class LPLHAgent:
             "action": action,
             "action_valid": action_valid,
             "observation": observation,
+            "done": bool(done),
             "score": score,
             "reward_change": reward_change,
             "rooms_visited_before": rooms_visited_before,
@@ -1809,6 +1853,7 @@ class LPLHAgent:
                 action=action,
                 action_valid=action_valid,
                 observation=observation,
+                done=bool(done),
                 score=score,
                 reward_change=reward_change,
                 rooms_visited_before=rooms_visited_before,
@@ -2154,6 +2199,16 @@ class LPLHAgent:
             return {}, "response did not contain an object"
         return parsed, ""
 
+    def _normalize_terminal_outcome(self, value) -> str:
+        text = self._normalize_event_piece(value)
+        if text in {"defeat", "victory", "other", "none"}:
+            return text
+        if text in {"death", "dead", "lost", "lose", "failed", "failure", "bad ending"}:
+            return "defeat"
+        if text in {"win", "won", "success", "complete", "completed"}:
+            return "victory"
+        return "none"
+
     def _normalize_auxiliary_gate_decision(self, parsed: dict, action: str,
                                            action_valid, observation: str = "") -> dict:
         parsed = parsed if isinstance(parsed, dict) else {}
@@ -2258,6 +2313,9 @@ class LPLHAgent:
         )
         return {
             "command_outcome": command_outcome,
+            "terminal_outcome": self._normalize_terminal_outcome(
+                parsed.get("terminal", parsed.get("terminal_outcome", "none"))
+            ),
             "environmental_change": {
                 "changed": env_changed,
                 "evidence": env_evidence,
@@ -2549,6 +2607,7 @@ class LPLHAgent:
                 "status": "unknown",
                 "reason": "Gate unavailable.",
             },
+            "terminal_outcome": "none",
             "environmental_change": {
                 "changed": False,
                 "evidence": "Gate unavailable; legacy environmental detector should run.",
@@ -2825,6 +2884,7 @@ class LPLHAgent:
             "fetch_k": config.EXPERIENCE_FETCH_K,
             "top_k": config.EXPERIENCE_TOP_K,
             "selection_policy": "decision_relevance_cap_not_quota",
+            "early_epoch_location_waiver": int(self.step_count or 0) <= 2,
             "earned_score_event_keys_this_epoch": sorted(
                 self.earned_score_event_keys_this_epoch
             ),
@@ -2844,6 +2904,7 @@ class LPLHAgent:
 
         selected = []
         selected_ids = set()
+        early_epoch = int(self.step_count or 0) <= 2
 
         def record_id(record: dict) -> str:
             return self._experience_record_id(record)
@@ -2875,7 +2936,9 @@ class LPLHAgent:
                 break
             if (kind_of(record) == "enabler"
                     and not self._enabler_completed_this_epoch(record)
-                    and self._experience_location_relevant(record, include_neighbors=True)):
+                    and (early_epoch or self._experience_location_relevant(
+                        record, include_neighbors=True
+                    ))):
                 add(record)
                 break
 
@@ -2885,7 +2948,9 @@ class LPLHAgent:
                 break
             if (kind_of(record) == "achievement"
                     and not self._achievement_earned_this_epoch(record)
-                    and self._experience_location_relevant(record, include_neighbors=True)):
+                    and (early_epoch or self._experience_location_relevant(
+                        record, include_neighbors=True
+                    ))):
                 add(record)
                 break
 
@@ -3543,6 +3608,32 @@ class LPLHAgent:
             f"score:v1:{trigger_norm}:{location_norm}:"
             f"{action_norm}:{int(reward_change or 0)}"
         )
+
+    def _death_event_key(self, action: str, location: str) -> str:
+        """Build a stable key for fatal-action summary dedup across epochs."""
+        action_norm = self._normalize_event_piece(action)
+        location_norm = self._normalize_event_piece(location)
+        return f"death:v1:{location_norm}:{action_norm}"
+
+    def _classify_death(self, done: bool, reward_change: int,
+                        terminal_status: str, observation: str) -> bool:
+        """Return True when the latest step should become death-warning memory."""
+        if reward_change < 0:
+            return True
+        if not done:
+            return False
+        terminal_norm = self._normalize_terminal_outcome(terminal_status)
+        if terminal_norm == "defeat":
+            return True
+        if terminal_norm == "victory":
+            return False
+        text = str(observation or "")
+        return bool(re.search(
+            r"(\*{2,}\s*you have died\s*\*{2,}|you have died|you are dead|"
+            r"you have lost|game over|you were killed|you are killed)",
+            text,
+            re.IGNORECASE,
+        ))
 
     def _score_location_reward_key(self, location: str, reward_change: int) -> str:
         location_norm = self._normalize_event_piece(location)

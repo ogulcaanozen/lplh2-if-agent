@@ -524,6 +524,20 @@ Make exactly these decisions:
      "already open", "already on", or "nothing special".
    - "unknown": ambiguous observations where the command outcome is not clear.
 
+0a. Terminal outcome
+   Classify only whether THIS step ended the game.
+   - "defeat": Game ended is true and the observation says the player died,
+     was killed, arrested, failed, lost, or otherwise reached a bad ending.
+   - "victory": Game ended is true and the observation says the player won,
+     completed the game, succeeded, or reached a final success state.
+   - "other": Game ended is true but the ending is neither clearly victory nor
+     defeat.
+   - "none": Game ended is false.
+   Game ended is authoritative: if Game ended is false, terminal must be "none".
+   Prefer "victory" over "defeat" when the ending congratulates the player,
+   reports completion, or announces a final/maximum score even if violent words
+   appear.
+
 1. Summary trigger decisions
    These decide whether the summary module should try to create a concrete,
    reusable memory for this step. Set "run": true only when the observation
@@ -626,6 +640,7 @@ Return compact JSON only between |start| and |end|. No prose.
 
 Schema:
 - "outcome": one of "accepted", "rejected", "no_effect", "unknown".
+- "terminal": one of "none", "defeat", "victory", "other".
 - "summary": list containing any of "navigation", "environmental", "narrative".
 - "inventory": boolean.
 - "world_state": boolean.
@@ -639,6 +654,7 @@ Example:
 |start|
 {{
   "outcome": "accepted",
+  "terminal": "none",
   "summary": ["navigation"],
   "inventory": false,
   "world_state": false,
@@ -658,6 +674,7 @@ Previous Location: {previous_location}
 Previous Action: {action}
 Action Validity From FM: {action_valid}
 Observation After Action: {observation}
+Game ended this step: {done}
 Current Score: {score}
 Reward Change: {reward_change}
 Rooms Visited Before This Step: {rooms_visited_before}

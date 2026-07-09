@@ -51,7 +51,8 @@ class AttemptLedger:
                     action_valid: bool | None, reward_change: int,
                     location_changed: bool, destination: str,
                     inventory_changed: bool, environment_changed: bool,
-                    repetition_status: str, state_key: str,
+                    repetition_status: str, terminal_defeat: bool,
+                    state_key: str,
                     step: int, epoch: int = 1) -> dict[str, Any]:
         loc_display = clean_text(location) or "unknown"
         cmd_display = clean_text(command)
@@ -92,6 +93,7 @@ class AttemptLedger:
             inventory_changed=inventory_changed,
             environment_changed=environment_changed,
             repetition_status=repetition_status,
+            terminal_defeat=terminal_defeat,
         )
         outcome_text = self._outcome_text(
             outcome_class=outcome_class,
@@ -199,7 +201,7 @@ class AttemptLedger:
 
     def problem_attempts_for_location(self, location: str,
                                       max_items: int = 8) -> list[dict[str, Any]]:
-        """Return compact invalid/unproductive attempts for prompt context.
+        """Return compact invalid/unproductive/fatal attempts for prompt context.
 
         This complements failed-command memory: the ledger is factual attempt
         history, while failed-command memory stores a concise semantic reason.
@@ -215,6 +217,7 @@ class AttemptLedger:
             if not (
                 int(outcomes.get("invalid", 0) or 0)
                 or int(outcomes.get("unproductive", 0) or 0)
+                or int(outcomes.get("fatal", 0) or 0)
             ):
                 continue
             entry = {
@@ -243,7 +246,10 @@ class AttemptLedger:
 
     def _outcome_class(self, action_valid: bool | None, reward_change: int,
                        location_changed: bool, inventory_changed: bool,
-                       environment_changed: bool, repetition_status: str) -> str:
+                       environment_changed: bool, repetition_status: str,
+                       terminal_defeat: bool = False) -> str:
+        if terminal_defeat:
+            return "fatal"
         if action_valid is False:
             return "invalid"
         if reward_change:
@@ -258,6 +264,8 @@ class AttemptLedger:
 
     def _outcome_text(self, outcome_class: str, observation: str,
                       reward_change: int, destination: str) -> str:
+        if outcome_class == "fatal":
+            return f"FATAL: {clean_text(observation)[:80]}"
         if outcome_class == "scored":
             sign = "+" if reward_change > 0 else ""
             return f"scored {sign}{reward_change}"
