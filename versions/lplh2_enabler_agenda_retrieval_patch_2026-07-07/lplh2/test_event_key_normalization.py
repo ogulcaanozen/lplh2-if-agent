@@ -121,15 +121,15 @@ class EventKeyNormalizationTests(unittest.TestCase):
         agent = self._agent()
         self.assertEqual(
             agent._score_event_key("gain", "open door", "Kitchen", 10),
-            "score:v1:gain:kitchen:open door:10",
+            "score:v1:gain:kitchen::open door:10",
         )
         self.assertEqual(
             agent._death_event_key("down", "Cellar"),
-            "death:v1:cellar:down",
+            "death:v1:cellar::down",
         )
         self.assertEqual(
             agent._score_location_reward_key("", 10),
-            "score_location_reward:v1:unknown:10",
+            "score_location_reward:v1:unknown::10",
         )
 
 

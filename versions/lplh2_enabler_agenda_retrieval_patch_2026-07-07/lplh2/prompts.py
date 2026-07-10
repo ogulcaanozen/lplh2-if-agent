@@ -222,8 +222,8 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 2. **Use Retrieved Experiences and Past Attempts**
 - **Relevance**: Apply past successes or observed clues that align with the current room or situation.
 - **Experience Headers**: Use the kind/use_as labels. A score-gain achievement is evidence that a command once worked, not a reason to repeat it when the same reward/state has already been achieved.
-- **Reward Enablers**: If an enabler header says linked_reward_not_earned_this_epoch=true and exact_enabler_action is in or near the current room, treat that exact enabler action as important setup before trying the linked scoring action. If linked_reward_earned_this_epoch=true, do not repeat the setup merely for reward.
-- **Unearned Achievements**: If an achievement header says not_earned_this_epoch=true and it is in or near the current room, treat its exact_scoring_action and setup as important actionable memory. If it says already_earned_this_epoch=true, do not repeat it merely for reward.
+- **Reward Enablers**: If an enabler header says linked_reward_not_earned_this_epoch=true and exact_enabler_action happened in this exact room, treat that exact enabler action as important setup before trying the linked scoring action. If linked_reward_earned_this_epoch=true, do not repeat the setup merely for reward.
+- **Unearned Achievements**: If an achievement header says not_earned_this_epoch=true and it happened in this exact room, treat its exact_scoring_action and setup as important actionable memory. If it says already_earned_this_epoch=true, do not repeat it merely for reward.
 - **Exact Event Commands**: Headers such as exact_scoring_action and exact_fatal_action name the exact command that caused that event. Do not replace them with a different command from the surrounding summary.
 - **Avoid Repetition**: Do not repeat failing commands indefinitely. If a command fails, adjust strategy.
 - **Focus on Gains**: Prioritize moves likely to unlock new paths, uncover essential items, or yield valuable information.

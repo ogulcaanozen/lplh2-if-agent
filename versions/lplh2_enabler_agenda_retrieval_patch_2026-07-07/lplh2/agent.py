@@ -546,6 +546,9 @@ class LPLHAgent:
                     score_location,
                     "Starting Location",
                 )
+                score_location_fingerprint = self._location_fingerprint_hash(
+                    score_location
+                )
                 score_experience_kind = (
                     "death_warning" if is_death
                     else "achievement" if reward_change > 0
@@ -557,6 +560,7 @@ class LPLHAgent:
                     death_event_key = self._death_event_key(
                         action=completed_action,
                         location=score_location,
+                        location_fingerprint=score_location_fingerprint,
                     )
                 elif reward_change > 0:
                     score_event_key = self._score_event_key(
@@ -564,10 +568,15 @@ class LPLHAgent:
                         action=completed_action,
                         location=score_location,
                         reward_change=reward_change,
+                        location_fingerprint=score_location_fingerprint,
                     )
                     self.earned_score_event_keys_this_epoch.add(score_event_key)
                     self.earned_score_location_reward_keys_this_epoch.add(
-                        self._score_location_reward_key(score_location, reward_change)
+                        self._score_location_reward_key(
+                            score_location,
+                            reward_change,
+                            location_fingerprint=score_location_fingerprint,
+                        )
                     )
 
                 event_key = death_event_key or score_event_key
@@ -582,6 +591,7 @@ class LPLHAgent:
                         "score_change": reward_change,
                         "current_score": score,
                         "location": score_location,
+                        "location_fingerprint": score_location_fingerprint,
                         "action": completed_action,
                         "terminal": done,
                         "terminal_status": terminal_status,
@@ -639,6 +649,7 @@ class LPLHAgent:
                         "step": self.step_count,
                         "location": score_location,
                         "location_issued": score_location,
+                        "location_fingerprint": score_location_fingerprint,
                         "location_after": location_after,
                         "action": completed_action,
                         "scoring_action": (
@@ -707,11 +718,20 @@ class LPLHAgent:
             )
             for trigger_type, trigger_meta in neutral_triggers:
                 try:
+                    neutral_location = self.kg_map.current_location or "unknown"
+                    neutral_issued_location = (
+                        trigger_meta.get("prev_location")
+                        if trigger_type == "navigation"
+                        else neutral_location
+                    ) or neutral_location
+                    neutral_location_fingerprint = self._location_fingerprint_hash(
+                        neutral_issued_location
+                    )
                     event_key = self._neutral_event_key(
                         trigger=trigger_type,
                         action=completed_action,
                         observation=observation,
-                        location=self.kg_map.current_location or "unknown",
+                        location=neutral_location,
                         prev_location=trigger_meta.get("prev_location"),
                         failed_attempts=trigger_meta.get("failed_attempts"),
                     )
@@ -743,7 +763,9 @@ class LPLHAgent:
                             metadata={
                                 "trigger": trigger_type,
                                 "action": completed_action,
-                                "location": self.kg_map.current_location or "unknown",
+                                "location": neutral_location,
+                                "location_issued": neutral_issued_location,
+                                "location_fingerprint": neutral_location_fingerprint,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
                                 "gate_reason": trigger_meta.get("gate_reason", ""),
@@ -779,7 +801,9 @@ class LPLHAgent:
                                 "current_score": score,
                                 "epoch": self.current_epoch,
                                 "step": self.step_count,
-                                "location": self.kg_map.current_location or "unknown",
+                                "location": neutral_location,
+                                "location_issued": neutral_issued_location,
+                                "location_fingerprint": neutral_location_fingerprint,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "action": completed_action,
                                 "event_key": event_key,
@@ -790,7 +814,9 @@ class LPLHAgent:
                             metadata={
                                 "trigger": trigger_type,
                                 "action": completed_action,
-                                "location": self.kg_map.current_location or "unknown",
+                                "location": neutral_location,
+                                "location_issued": neutral_issued_location,
+                                "location_fingerprint": neutral_location_fingerprint,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
                                 "gate_reason": trigger_meta.get("gate_reason", ""),
@@ -817,7 +843,9 @@ class LPLHAgent:
                                 "current_score": score,
                                 "epoch": self.current_epoch,
                                 "step": self.step_count,
-                                "location": self.kg_map.current_location or "unknown",
+                                "location": neutral_location,
+                                "location_issued": neutral_issued_location,
+                                "location_fingerprint": neutral_location_fingerprint,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "action": completed_action,
                                 "event_key": event_key,
@@ -2876,13 +2904,15 @@ class LPLHAgent:
         if config.EXPERIENCE_RENDER_DIVERSITY:
             shown = self._select_diverse_experiences(records, config.EXPERIENCE_TOP_K)
         else:
-            shown = records[:config.EXPERIENCE_TOP_K]
+            shown = [
+                record for record in records
+                if self._experience_location_relevant(record, include_neighbors=False)
+            ][:config.EXPERIENCE_TOP_K]
         self.last_retrieval_debug = {
             "diversity_enabled": bool(config.EXPERIENCE_RENDER_DIVERSITY),
             "fetch_k": config.EXPERIENCE_FETCH_K,
             "top_k": config.EXPERIENCE_TOP_K,
             "selection_policy": "decision_relevance_cap_not_quota",
-            "early_epoch_location_waiver": int(self.step_count or 0) <= 2,
             "earned_score_event_keys_this_epoch": sorted(
                 self.earned_score_event_keys_this_epoch
             ),
@@ -2902,7 +2932,6 @@ class LPLHAgent:
 
         selected = []
         selected_ids = set()
-        early_epoch = int(self.step_count or 0) <= 2
 
         def record_id(record: dict) -> str:
             return self._experience_record_id(record)
@@ -2928,27 +2957,27 @@ class LPLHAgent:
                 add(record)
                 break
 
-        # Then local setup actions that enable an unearned reward.
+        # Then exact-room setup actions that enable an unearned reward.
         for record in records:
             if len(selected) >= top_k:
                 break
             if (kind_of(record) == "enabler"
                     and not self._enabler_completed_this_epoch(record)
-                    and (early_epoch or self._experience_location_relevant(
-                        record, include_neighbors=True
-                    ))):
+                    and self._experience_location_relevant(
+                        record, include_neighbors=False
+                    )):
                 add(record)
                 break
 
-        # Then nearby achievement that has not already been earned this epoch.
+        # Then exact-room achievement not already earned this epoch.
         for record in records:
             if len(selected) >= top_k:
                 break
             if (kind_of(record) == "achievement"
                     and not self._achievement_earned_this_epoch(record)
-                    and (early_epoch or self._experience_location_relevant(
-                        record, include_neighbors=True
-                    ))):
+                    and self._experience_location_relevant(
+                        record, include_neighbors=False
+                    )):
                 add(record)
                 break
 
@@ -2970,7 +2999,9 @@ class LPLHAgent:
         for record in records:
             if len(selected) >= top_k:
                 break
-            if kind_of(record) == "route" and not self._route_already_mapped(record):
+            if (kind_of(record) == "route"
+                    and self._route_for_current_room(record)
+                    and not self._route_already_mapped(record)):
                 add(record)
         return selected[:top_k]
 
@@ -3004,7 +3035,11 @@ class LPLHAgent:
             return True
         reward = metadata.get("enables_reward")
         location = metadata.get("enables_location") or metadata.get("location")
-        return self._score_location_reward_earned(location, reward)
+        return self._score_location_reward_earned(
+            location,
+            reward,
+            location_fingerprint=metadata.get("enables_location_fingerprint", ""),
+        )
 
     def _score_location_reward_from_metadata_earned(self, metadata: dict) -> bool:
         reward = metadata.get("score_change")
@@ -3013,60 +3048,47 @@ class LPLHAgent:
             or metadata.get("location")
             or metadata.get("enables_location")
         )
-        return self._score_location_reward_earned(location, reward)
+        return self._score_location_reward_earned(
+            location,
+            reward,
+            location_fingerprint=metadata.get("location_fingerprint", ""),
+        )
 
-    def _score_location_reward_earned(self, location, reward) -> bool:
+    def _score_location_reward_earned(self, location, reward,
+                                      location_fingerprint: str = "") -> bool:
         try:
             reward_int = int(reward)
         except Exception:
             return False
-        key = self._score_location_reward_key(str(location or ""), reward_int)
+        key = self._score_location_reward_key(
+            str(location or ""),
+            reward_int,
+            location_fingerprint=location_fingerprint,
+        )
         return bool(key and key in self.earned_score_location_reward_keys_this_epoch)
 
     def _experience_location_relevant(self, record: dict,
                                       include_neighbors: bool = False) -> bool:
+        """Match the physical issuing room; neighbors and destinations never qualify."""
         metadata = record.get("metadata") or {}
-        current_keys = self._current_location_relevance_keys(include_neighbors)
-        for field in ("location", "location_issued", "location_after", "prev_location"):
-            value = metadata.get(field)
-            if value and normalize_location_key(value) in current_keys:
-                return True
-        return False
-
-    def _current_location_relevance_keys(self, include_neighbors: bool) -> set[str]:
         current = self.kg_map.current_location or ""
-        keys = {normalize_location_key(current)}
-        if not include_neighbors or not current:
-            return keys
-        current_key = normalize_location_key(current)
-        for loc, data in self.kg_map.nodes.items():
-            loc_key = normalize_location_key(loc)
-            direction_values = list((data.get("direction", {}) or {}).values())
-            action_values = list((data.get("confirmed_actions", {}) or {}).values())
-            if loc_key == current_key:
-                keys.update(normalize_location_key(dest) for dest in direction_values)
-                keys.update(normalize_location_key(dest) for dest in action_values)
-            for dest in direction_values + action_values:
-                if normalize_location_key(dest) == current_key:
-                    keys.add(loc_key)
-        keys.discard("")
-        return keys
+        record_location = metadata.get("location_issued") or metadata.get("location") or ""
+        if not current or not record_location:
+            return False
+
+        record_fingerprint = str(metadata.get("location_fingerprint") or "")
+        current_fingerprint = self._location_fingerprint_hash(current)
+        if record_fingerprint and current_fingerprint:
+            record_base = self._base_location_identity_key(record_location)
+            current_base = self._base_location_identity_key(current)
+            return (
+                record_base == current_base
+                and record_fingerprint == current_fingerprint
+            )
+        return normalize_location_key(record_location) == normalize_location_key(current)
 
     def _warning_experience_relevant(self, record: dict) -> bool:
-        if self._experience_location_relevant(record, include_neighbors=True):
-            return True
-        text = self._normalize_event_piece(record.get("text", ""))
-        observation = ""
-        if self.history:
-            observation = self._normalize_event_piece(self.history[-1][1])
-        current_objects = " ".join(self._visible_objects_for_location(
-            self.kg_map.current_location or "unknown"
-        ))
-        context = self._normalize_event_piece(f"{observation} {current_objects}")
-        if not text or not context:
-            return False
-        tokens = {tok for tok in context.split() if len(tok) >= 5}
-        return bool(tokens and tokens.intersection(text.split()))
+        return self._experience_location_relevant(record, include_neighbors=False)
 
     def _object_anchored_experience(self, record: dict) -> bool:
         if not self._experience_location_relevant(record, include_neighbors=False):
@@ -3087,6 +3109,8 @@ class LPLHAgent:
             "kind": metadata.get("kind") or metadata.get("trigger") or "memory",
             "trigger": metadata.get("trigger", ""),
             "location": metadata.get("location", ""),
+            "location_issued": metadata.get("location_issued", ""),
+            "location_fingerprint": metadata.get("location_fingerprint", ""),
             "prev_location": metadata.get("prev_location", ""),
             "action": metadata.get("action", ""),
             "score_change": metadata.get("score_change", ""),
@@ -3147,7 +3171,7 @@ class LPLHAgent:
                     header_bits.append("use_as=do_not_repeat_for_reward")
                 else:
                     header_bits.append("not_earned_this_epoch=true")
-                    header_bits.append("use_as=nearby_reward_procedure")
+                    header_bits.append("use_as=exact_room_reward_procedure")
                 if metadata.get("current_score") not in ("", None):
                     header_bits.append(f"score_then={metadata.get('current_score')}")
                     header_bits.append(f"score_now={self.total_score}")
@@ -3197,13 +3221,7 @@ class LPLHAgent:
         metadata = record.get("metadata") or {}
         if (metadata.get("kind") or metadata.get("trigger")) != "route":
             return False
-        prev_location = metadata.get("prev_location", "")
-        location = metadata.get("location", "")
-        current_key = normalize_location_key(self.kg_map.current_location or "")
-        return (
-            normalize_location_key(prev_location) == current_key
-            or normalize_location_key(location) == current_key
-        )
+        return self._experience_location_relevant(record, include_neighbors=False)
 
     def _route_already_mapped(self, record: dict) -> bool:
         metadata = record.get("metadata") or {}
@@ -3596,22 +3614,65 @@ class LPLHAgent:
         obs_sig = self._event_text_signature(observation)
         return f"neutral:v1:{trigger_norm}:{location_norm}:{action_norm}:{obs_sig}"
 
+    def _location_fingerprint_hash(self, location: str) -> str:
+        """Return the stable first-sentence fingerprint hash for a KG room."""
+        kg_map = getattr(self, "kg_map", None)
+        if kg_map is None:
+            return ""
+        location_text = self._clean_text(location)
+        fingerprints = getattr(kg_map, "room_fingerprints", {}) or {}
+        fingerprint = fingerprints.get(location_text, "")
+        if not fingerprint:
+            try:
+                canonical = kg_map._canonicalize_known_location(location_text)
+            except Exception:
+                canonical = location_text
+            fingerprint = fingerprints.get(canonical, "")
+        if not fingerprint:
+            return ""
+        return hashlib.sha1(str(fingerprint).encode("utf-8")).hexdigest()[:12]
+
+    def _base_location_identity_key(self, location: str) -> str:
+        """Normalize a room title without its visit-order-dependent #N suffix."""
+        base = re.sub(r"\s+#\d+\s*$", "", self._clean_text(location))
+        return normalize_location_key(base) or "unknown"
+
+    def _event_location_identity(self, location: str,
+                                 location_fingerprint: str = None) -> tuple[str, str]:
+        """Return a stable location key plus fingerprint for event identities."""
+        fingerprint = (
+            self._location_fingerprint_hash(location)
+            if location_fingerprint is None
+            else str(location_fingerprint or "")
+        )
+        if fingerprint:
+            return self._base_location_identity_key(location), fingerprint
+        return normalize_location_key(location) or "unknown", ""
+
     def _score_event_key(self, trigger: str, action: str, location: str,
-                         reward_change: int) -> str:
+                         reward_change: int,
+                         location_fingerprint: str = None) -> str:
         """Build a stable key for score-gain summary dedup across epochs."""
         trigger_norm = self._normalize_event_piece(trigger)
         action_norm = normalize_command_key(action) or "unknown"
-        location_norm = normalize_location_key(location) or "unknown"
+        location_norm, fingerprint = self._event_location_identity(
+            location,
+            location_fingerprint,
+        )
         return (
-            f"score:v1:{trigger_norm}:{location_norm}:"
+            f"score:v1:{trigger_norm}:{location_norm}:{fingerprint}:"
             f"{action_norm}:{int(reward_change or 0)}"
         )
 
-    def _death_event_key(self, action: str, location: str) -> str:
+    def _death_event_key(self, action: str, location: str,
+                         location_fingerprint: str = None) -> str:
         """Build a stable key for fatal-action summary dedup across epochs."""
         action_norm = normalize_command_key(action) or "unknown"
-        location_norm = normalize_location_key(location) or "unknown"
-        return f"death:v1:{location_norm}:{action_norm}"
+        location_norm, fingerprint = self._event_location_identity(
+            location,
+            location_fingerprint,
+        )
+        return f"death:v1:{location_norm}:{fingerprint}:{action_norm}"
 
     def _classify_death(self, done: bool, reward_change: int,
                         terminal_status: str, observation: str) -> bool:
@@ -3633,9 +3694,16 @@ class LPLHAgent:
             re.IGNORECASE,
         ))
 
-    def _score_location_reward_key(self, location: str, reward_change: int) -> str:
-        location_norm = normalize_location_key(location) or "unknown"
-        return f"score_location_reward:v1:{location_norm}:{int(reward_change or 0)}"
+    def _score_location_reward_key(self, location: str, reward_change: int,
+                                   location_fingerprint: str = None) -> str:
+        location_norm, fingerprint = self._event_location_identity(
+            location,
+            location_fingerprint,
+        )
+        return (
+            f"score_location_reward:v1:{location_norm}:{fingerprint}:"
+            f"{int(reward_change or 0)}"
+        )
 
     def _store_reward_enabler_experiences(self, score_event_key: str,
                                           reward_change: int,
@@ -3656,10 +3724,22 @@ class LPLHAgent:
             enabler_location = self._clean_text(item.get("location", ""))
             if not enabler_action or not enabler_location:
                 continue
+            enabler_location_fingerprint = self._location_fingerprint_hash(
+                enabler_location
+            )
+            scoring_location_fingerprint = self._location_fingerprint_hash(
+                scoring_location
+            )
+            enabler_location_key, enabler_fingerprint_key = (
+                self._event_location_identity(
+                    enabler_location,
+                    enabler_location_fingerprint,
+                )
+            )
 
             enabler_event_key = (
                 "enabler:v1:"
-                f"{normalize_location_key(enabler_location)}:"
+                f"{enabler_location_key}:{enabler_fingerprint_key}:"
                 f"{normalize_command_key(enabler_action)}:"
                 f"{score_event_key}"
             )
@@ -3689,12 +3769,15 @@ class LPLHAgent:
                 "trigger": "score_enabler",
                 "event_key": enabler_event_key,
                 "location": enabler_location,
+                "location_issued": enabler_location,
+                "location_fingerprint": enabler_location_fingerprint,
                 "action": enabler_action,
                 "enabler_action": enabler_action,
                 "enables_event_key": score_event_key,
                 "enables_reward": int(reward_change),
                 "enables_scoring_action": scoring_action,
                 "enables_location": scoring_location,
+                "enables_location_fingerprint": scoring_location_fingerprint,
                 "location_after": location_after,
                 "steps_before_reward": int(steps_before),
                 "epoch": int(self.current_epoch),
