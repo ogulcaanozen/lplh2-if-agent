@@ -158,6 +158,59 @@ class NavigationEnforcementTests(unittest.TestCase):
         self.assertEqual(debug["layer"], 2)
         self.assertEqual(debug["safety_switch"], "")
 
+    def test_direction_echo_in_rejection_does_not_bypass_enforcement(self):
+        room_description = "<< Outside >> You are outside in the cold."
+        rejection = (
+            "You can't go south from here!\n\n"
+            "<< Outside >>\n"
+            "You are outside in the cold. To the east is a dead end. "
+            "To the west is the rest of the street."
+        )
+        agent = self._agent(
+            room="<< Outside >>",
+            observation=room_description,
+            responses=[_response("south")],
+        )
+        agent._record_visit_direction_failure(
+            "<< Outside >>", "south", rejection, step=9
+        )
+        command, _, _, debug = self._enforce(agent, "south", rejection)
+        self.assertEqual(command, "south")
+        self.assertEqual(debug["layer"], 2)
+        self.assertEqual(debug["safety_switch"], "")
+
+    def test_positive_direction_hint_still_bypasses_enforcement(self):
+        observation = "Closet You are in a closet. There is no reason to stay. Go south."
+        agent = self._agent(room="Closet", observation=observation)
+        agent._record_visit_direction_failure(
+            "Closet", "south", "You can't go south from here!", step=9
+        )
+        command, _, _, debug = self._enforce(agent, "south", observation)
+        self.assertEqual(command, "south")
+        self.assertEqual(debug["layer"], 0)
+        self.assertEqual(debug["safety_switch"], "observation_mention")
+
+    def test_mixed_rejection_and_different_positive_hint(self):
+        observation = "You can't go north, but a path leads south."
+        agent = self._agent(observation="Room You are here.")
+        agent._record_visit_direction_failure(
+            "Room", "south", "The southern route was previously blocked.", step=9
+        )
+        command, _, _, debug = self._enforce(agent, "south", observation)
+        self.assertEqual(command, "south")
+        self.assertEqual(debug["safety_switch"], "observation_mention")
+
+    def test_negative_route_description_is_not_a_positive_hint(self):
+        agent = self._agent(observation="<< Outside >> You are outside.")
+        self.assertFalse(agent._observation_mentions_direction(
+            "To the east is a dead end. To the west is the rest of the street.",
+            "east",
+        ))
+        self.assertTrue(agent._observation_mentions_direction(
+            "To the east is a dead end. To the west is the rest of the street.",
+            "west",
+        ))
+
     def test_leaving_and_reentering_resets_first_probe_budget(self):
         observation = "Room You are here."
         agent = self._agent(observation=observation)

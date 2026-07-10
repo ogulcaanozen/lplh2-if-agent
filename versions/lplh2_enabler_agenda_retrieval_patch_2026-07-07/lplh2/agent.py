@@ -3894,8 +3894,40 @@ class LPLHAgent:
         direction = self._blocked_direction_for_command(direction) or str(direction or "").strip().lower()
         if not direction:
             return False
-        normalized = re.sub(r"[^a-z0-9]+", " ", str(observation or "").lower())
-        return bool(re.search(rf"\b{re.escape(direction)}\b", normalized))
+        text = str(observation or "").replace("’", "'").lower()
+        segments = re.split(r"(?:\r?\n)+|(?<=[.!?])\s+", text)
+        for segment in segments:
+            normalized = re.sub(r"[^a-z0-9]+", " ", segment)
+            if not re.search(rf"\b{re.escape(direction)}\b", normalized):
+                continue
+            if self._is_rejected_direction_mention(segment, direction):
+                continue
+            return True
+        return False
+
+    def _is_rejected_direction_mention(self, segment: str, direction: str) -> bool:
+        """Distinguish a route hint from an error message echoing the command."""
+        segment = re.sub(r"\s+", " ", str(segment or "").strip().lower())
+        escaped = re.escape(direction)
+        toward = r"(?:to\s+|towards?\s+)?(?:the\s+)?"
+        blocked_state = (
+            r"(?:blocked|closed|impassable|impenetrable|unavailable|"
+            r"not\s+available|not\s+possible|dead\s+end)"
+        )
+        patterns = (
+            rf"\b(?:can\s*not|can't|could\s*not|couldn't|won't|unable\s+to)\s+"
+            rf"(?:go|walk|run|head|travel|move)\s+{toward}{escaped}\b",
+            rf"\b(?:no|not)\s+(?:way|path|passage|exit|route|door)\s+"
+            rf"{toward}{escaped}\b",
+            rf"\b{blocked_state}\b[^.!?]{{0,48}}\b{escaped}\b",
+            rf"\b{escaped}\b[^.!?]{{0,48}}"
+            rf"\b(?:is\s+)?{blocked_state}\b",
+            rf"\b(?:don't|do\s+not|doesn't|does\s+not)\s+"
+            rf"(?:understand|recognize)[^.!?]*\b{escaped}\b",
+            rf"\b{escaped}\b[^.!?]*\b(?:don't|do\s+not|doesn't|does\s+not)\s+"
+            rf"(?:understand|recognize)\b",
+        )
+        return any(re.search(pattern, segment) for pattern in patterns)
 
     def _navigation_safety_switch(self, location: str, direction: str,
                                   observation: str, failed_this_visit: int) -> str:
