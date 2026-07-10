@@ -29,6 +29,8 @@ class KGMap:
         self.visited_rooms = []
         self.inventory = []       # items the player is carrying
         self.room_fingerprints = {}  # {room_node: normalized description signature}
+        self.room_description_fingerprints = {}  # full description, used only as an identity-risk signal
+        self._confirmed_direction_history = {}  # {room_node: {canonical directions}}
 
     def reset(self):
         """Reset the KG-map for a new game run."""
@@ -38,6 +40,8 @@ class KGMap:
         self.visited_rooms = []
         self.inventory = []
         self.room_fingerprints = {}
+        self.room_description_fingerprints = {}
+        self._confirmed_direction_history = {}
 
     def update(self, triples: list, action: str = ""):
         """Update the knowledge graph with extracted triples.
@@ -88,6 +92,7 @@ class KGMap:
                         continue
                     destination = self._canonicalize_known_location(obj_clean)
                     self.nodes[loc]["direction"][direction] = destination
+                    self._remember_confirmed_direction(loc, direction)
                     # Direction is now confirmed — remove from may_direction
                     may = self.nodes[loc]["may_direction"]
                     if direction in may:
@@ -143,6 +148,7 @@ class KGMap:
             return existing
 
         fingerprint = self._room_fingerprint(title, observation)
+        description_fingerprint = self._full_room_fingerprint(title, observation)
         base_key = self._location_key(title)
         candidates = [
             loc for loc in self.nodes
@@ -152,19 +158,29 @@ class KGMap:
             node = self._ensure_node(title)
             if fingerprint:
                 self.room_fingerprints[node] = fingerprint
+            if description_fingerprint:
+                self.room_description_fingerprints[node] = description_fingerprint
             return node
 
         if fingerprint:
             for loc in candidates:
                 if self.room_fingerprints.get(loc) == fingerprint:
+                    self.room_description_fingerprints.setdefault(
+                        loc,
+                        description_fingerprint,
+                    )
                     return loc
             for loc in candidates:
                 if not self.room_fingerprints.get(loc):
                     self.room_fingerprints[loc] = fingerprint
+                    if description_fingerprint:
+                        self.room_description_fingerprints[loc] = description_fingerprint
                     return loc
             numbered = self._next_numbered_location(title, candidates)
             node = self._ensure_node(numbered)
             self.room_fingerprints[node] = fingerprint
+            if description_fingerprint:
+                self.room_description_fingerprints[node] = description_fingerprint
             return node
 
         return candidates[0]
@@ -177,6 +193,9 @@ class KGMap:
         fingerprint = self._room_fingerprint(location, observation)
         if fingerprint and not self.room_fingerprints.get(location):
             self.room_fingerprints[location] = fingerprint
+        description_fingerprint = self._full_room_fingerprint(location, observation)
+        if description_fingerprint and not self.room_description_fingerprints.get(location):
+            self.room_description_fingerprints[location] = description_fingerprint
         return self.room_fingerprints.get(location, "")
 
     def take_item(self, item: str):
@@ -679,6 +698,14 @@ class KGMap:
         first_sentence = re.sub(r"\b(the|a|an)\b", " ", first_sentence)
         return re.sub(r"\s+", " ", first_sentence).strip()
 
+    def _full_room_fingerprint(self, title: str, observation: str) -> str:
+        """Normalize a fuller room description for conservative identity checks."""
+        text = re.sub(r"\s+", " ", str(observation or "")).strip()
+        title_clean = re.escape(self._clean_location_display(title))
+        text = re.sub(rf"^{title_clean}\b", "", text, flags=re.IGNORECASE).strip().lower()
+        text = re.sub(r"[^a-z0-9\s]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()[:600]
+
     def _base_location_key(self, location: str) -> str:
         display = self._clean_location_display(location)
         display = re.sub(r"\s+#\d+$", "", display)
@@ -783,6 +810,7 @@ class KGMap:
                 may.remove(direction_lower)
             # Also remove from confirmed exits if it was falsely recorded there
             if direction_lower in node["direction"]:
+                self._remember_confirmed_direction(self.current_location, direction_lower)
                 del node["direction"][direction_lower]
 
     def mark_direction_tried_at(self, direction: str, location: str):
@@ -802,6 +830,7 @@ class KGMap:
             if direction_lower in may:
                 may.remove(direction_lower)
             if direction_lower in node["direction"]:
+                self._remember_confirmed_direction(location, direction_lower)
                 del node["direction"][direction_lower]
 
     def confirm_direction(self, from_location: str, direction: str, to_location: str):
@@ -815,6 +844,7 @@ class KGMap:
         to_location = self._canonicalize_known_location(to_location)
         if from_location and from_location in self.nodes:
             node = self.nodes[from_location]
+            self._remember_confirmed_direction(from_location, direction_lower)
             if to_location and not self._is_placeholder_destination(to_location, direction_lower):
                 node["direction"][direction_lower] = to_location
             may = node["may_direction"]
@@ -830,6 +860,50 @@ class KGMap:
         if not direction_lower or not location or location not in self.nodes:
             return False
         return direction_lower in self.nodes[location].get("blocked_directions", [])
+
+    def _remember_confirmed_direction(self, location: str, direction: str):
+        location = self._canonicalize_known_location(location)
+        direction = self._canonical_direction(direction)
+        if location and direction in self._standard_directions():
+            self._confirmed_direction_history.setdefault(location, set()).add(direction)
+
+    def was_direction_confirmed(self, location: str, direction: str) -> bool:
+        """True when an exit is currently or historically confirmed for a node."""
+        location = self._canonicalize_known_location(location)
+        direction = self._canonical_direction(direction)
+        if not location or location not in self.nodes or not direction:
+            return False
+        if direction in (self.nodes[location].get("direction", {}) or {}):
+            return True
+        return direction in self._confirmed_direction_history.get(location, set())
+
+    def has_same_title_sibling(self, location: str) -> bool:
+        """True when multiple KG nodes share this room's unsuffixed title."""
+        location = self._canonicalize_known_location(location)
+        if not location:
+            return False
+        base_key = self._base_location_key(location)
+        return sum(
+            1 for candidate in self.nodes
+            if self._base_location_key(candidate) == base_key
+        ) > 1
+
+    def room_fingerprint_conflicts(self, location: str, observation: str) -> bool:
+        """Flag a possible merged-room identity without mutating the map."""
+        location = self._canonicalize_known_location(location)
+        if not location:
+            return False
+        text = re.sub(r"\s+", " ", str(observation or "")).strip()
+        base_title = re.sub(
+            r"\s+#\d+$",
+            "",
+            self._clean_location_display(location),
+        )
+        if not base_title or not text.lower().startswith(base_title.lower()):
+            return False
+        stored = self.room_description_fingerprints.get(location, "")
+        current = self._full_room_fingerprint(location, observation)
+        return bool(stored and current and stored != current)
 
     def confirm_action_transition(self, from_location: str, action: str, to_location: str):
         """Record a confirmed non-cardinal transition in the source room.

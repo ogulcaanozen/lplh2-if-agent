@@ -1415,6 +1415,7 @@ class GameRunner:
             "affordance_status": aff.get("status"),
             "affordance_ideas": len(aff.get("ideas", [])),
             "repeat_self_check": generation.get("repeat_self_check", {}),
+            "blocked_direction_guard": generation.get("blocked_direction_guard", {}),
             "attempt_count_before_command_here": generation.get("attempt_count_before_command_here"),
             "generation_timings": generation.get("timings", {}),
         }
@@ -1451,6 +1452,14 @@ class GameRunner:
         self._action_generation_log_file.write("\n\nrepeat self-check:\n")
         self._action_generation_log_file.write(
             json.dumps(generation.get("repeat_self_check", {}), indent=2, ensure_ascii=False)
+        )
+        self._action_generation_log_file.write("\n\nvisit-scoped navigation enforcement:\n")
+        self._action_generation_log_file.write(
+            json.dumps(
+                generation.get("blocked_direction_guard", {}),
+                indent=2,
+                ensure_ascii=False,
+            )
         )
         self._action_generation_log_file.write("\n\naction generation timings:\n")
         self._action_generation_log_file.write(

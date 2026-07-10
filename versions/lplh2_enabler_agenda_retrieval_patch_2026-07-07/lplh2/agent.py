@@ -78,6 +78,7 @@ class LPLHAgent:
         self.earned_score_event_keys_this_epoch = set()
         self.earned_score_location_reward_keys_this_epoch = set()
         self._recent_outcomes = []
+        self._visit_direction_failures = {}
 
     def reset(self, keep_experiences: bool = True):
         """Reset the agent for a new epoch.
@@ -111,6 +112,7 @@ class LPLHAgent:
         self.earned_score_event_keys_this_epoch = set()
         self.earned_score_location_reward_keys_this_epoch = set()
         self._recent_outcomes = []
+        self._visit_direction_failures = {}
         logger.info(f"Agent reset (keep_experiences={keep_experiences})")
 
     def act(self, observation: str, score: int, done: bool, info: dict,
@@ -192,9 +194,6 @@ class LPLHAgent:
         try:
             is_valid = self.fm.validate_action(completed_action, observation)
             action_valid = is_valid
-            prev_lower = completed_action.lower().strip()
-            if is_valid is False and prev_lower in self.kg_map._direction_set():
-                self.kg_map.mark_direction_tried(prev_lower)
             if is_valid:
                 split = self.fm.split_action(completed_action)
                 action_split = split
@@ -912,6 +911,26 @@ class LPLHAgent:
             and bool(self.kg_map.current_location)
             and self.kg_map.current_location != prev_location
         )
+        completed_direction = self._blocked_direction_for_command(completed_action)
+        if location_changed_for_affordance:
+            self._reset_direction_visit_budget(
+                previous_location=prev_location,
+                current_location=self.kg_map.current_location,
+            )
+        elif action_valid is False and completed_direction:
+            failure_location = source_location_for_attempt
+            self.kg_map.mark_direction_tried_at(
+                completed_direction,
+                failure_location,
+            )
+            self._record_visit_direction_failure(
+                location=failure_location,
+                direction=completed_direction,
+                observation=observation,
+                step=self.step_count,
+            )
+            detail["modules"]["kg_map"]["room_info"] = self.kg_map.get_current_room_info()
+            detail["modules"]["kg_map"]["kg_map_context"] = self.kg_map.to_prompt_string()
         inventory_changed_for_repetition = set(self.kg_map.inventory) != inventory_before
         if not source_state_snapshot:
             source_location = source_location_for_attempt
@@ -1381,9 +1400,10 @@ class LPLHAgent:
                 flush=True,
             )
         brainstormed_command_ideas = affordance_result.get("ideas_for_prompt", "[]")
+        kg_map_context = self._prompt_kg_map_context()
 
         prompt = LPLH_ACTION_GENERATION_PROMPT.format(
-            kg_map=self.kg_map.to_prompt_string(),
+            kg_map=kg_map_context,
             action_pairs=action_space_context,
             experiences=experiences,
             stored_situations=stored_situations,
@@ -1399,13 +1419,7 @@ class LPLHAgent:
         )
 
         raw_llm_response = ""
-        blocked_direction_guard = {
-            "triggered": False,
-            "blocked_command": "",
-            "retry_raw_response": "",
-            "retry_command": "",
-            "fallback_used": False,
-        }
+        blocked_direction_guard = self._empty_navigation_guard_debug()
         main_llm_started = time.perf_counter()
         try:
             if initial_generation:
@@ -1417,42 +1431,19 @@ class LPLHAgent:
             )
             command = self._parse_command(raw_llm_response)
             repeat_check = self._parse_repeat_check(raw_llm_response)
-            if self._is_blocked_direction_command(
+            (
                 command,
-                self.kg_map.current_location or "unknown",
-            ):
-                blocked_direction_guard["triggered"] = True
-                blocked_direction_guard["blocked_command"] = command
-                retry_prompt = (
-                    f"{prompt}\n\n"
-                    "BLOCKED EXIT CORRECTION:\n"
-                    f"The command '{command}' is a confirmed blocked exit from "
-                    f"the current location '{self.kg_map.current_location}'. "
-                    "Choose one different executable command. Do not choose that "
-                    "same blocked direction again unless the map explicitly changed."
-                )
-                retry_raw = self.llm.chat(
-                    system_prompt="You are an expert player of text-based interactive fiction games.",
-                    user_prompt=retry_prompt,
-                    think=True,
-                )
-                retry_command = self._parse_command(retry_raw)
-                blocked_direction_guard["retry_raw_response"] = retry_raw
-                blocked_direction_guard["retry_command"] = retry_command
-                if self._is_blocked_direction_command(
-                    retry_command,
-                    self.kg_map.current_location or "unknown",
-                ):
-                    command = "look"
-                    repeat_check = {
-                        "is_repeat": False,
-                        "reason": "Blocked-exit guard replaced a repeated confirmed blocked direction with look.",
-                    }
-                    blocked_direction_guard["fallback_used"] = True
-                else:
-                    command = retry_command
-                    raw_llm_response = retry_raw
-                    repeat_check = self._parse_repeat_check(retry_raw)
+                raw_llm_response,
+                repeat_check,
+                blocked_direction_guard,
+            ) = self._apply_navigation_enforcement(
+                command=command,
+                raw_llm_response=raw_llm_response,
+                repeat_check=repeat_check,
+                prompt=prompt,
+                observation=observation,
+                affordance_agenda=affordance_result.get("affordance_agenda", []),
+            )
             attempted_before_here = self.attempt_ledger.count(
                 self.kg_map.current_location or "unknown",
                 command,
@@ -1475,7 +1466,7 @@ class LPLHAgent:
         timings["total"] = round(time.perf_counter() - generation_started, 4)
 
         generation = {
-            "kg_map_context": self.kg_map.to_prompt_string(),
+            "kg_map_context": kg_map_context,
             "action_space_context": action_space_context,
             "retrieved_experiences": experiences,
             "retrieval_debug": self.last_retrieval_debug,
@@ -3837,9 +3828,263 @@ class LPLHAgent:
             return aliases.get(candidate, candidate if candidate in aliases.values() else "")
         return ""
 
-    def _is_blocked_direction_command(self, action: str, location: str) -> bool:
-        direction = self._blocked_direction_for_command(action)
-        return bool(direction and self.kg_map.is_direction_blocked(location, direction))
+    def _empty_navigation_guard_debug(self) -> dict:
+        """Stable log schema for visit-scoped navigation enforcement."""
+        return {
+            "triggered": False,
+            "layer": 0,
+            "direction": "",
+            "failed_this_visit": 0,
+            "last_message": "",
+            "last_failed_steps_ago": None,
+            "safety_switch": "",
+            "adjudication_raw_response": "",
+            "adjudicated_insisted": False,
+            "menu_offered": [],
+            "menu_raw_response": "",
+            "substituted_command": "",
+            "final_command": "",
+        }
+
+    def _visit_direction_record(self, location: str, direction: str,
+                                create: bool = False) -> dict:
+        location_key = normalize_location_key(location) or "unknown"
+        direction = self._blocked_direction_for_command(direction) or str(direction or "").strip().lower()
+        if not direction:
+            return {}
+        location_records = self._visit_direction_failures.get(location_key)
+        if location_records is None:
+            if not create:
+                return {}
+            location_records = {}
+            self._visit_direction_failures[location_key] = location_records
+        record = location_records.get(direction)
+        if record is None and create:
+            record = {
+                "count": 0,
+                "last_message": "",
+                "last_step": 0,
+                "adjudicated": False,
+                "menu_adjudicated": False,
+                "menu_substituted": False,
+            }
+            location_records[direction] = record
+        return record or {}
+
+    def _record_visit_direction_failure(self, location: str, direction: str,
+                                        observation: str, step: int) -> dict:
+        """Record one rejected movement during the current contiguous room visit."""
+        record = self._visit_direction_record(location, direction, create=True)
+        record["count"] = int(record.get("count", 0)) + 1
+        record["last_message"] = str(observation or "").strip()
+        record["last_step"] = int(step or 0)
+        return dict(record)
+
+    def _reset_direction_visit_budget(self, previous_location: str,
+                                      current_location: str):
+        """End the source visit and start the destination with fresh budgets."""
+        previous_key = normalize_location_key(previous_location)
+        current_key = normalize_location_key(current_location)
+        if previous_key:
+            self._visit_direction_failures.pop(previous_key, None)
+        if current_key:
+            self._visit_direction_failures.pop(current_key, None)
+
+    def _observation_mentions_direction(self, observation: str, direction: str) -> bool:
+        direction = self._blocked_direction_for_command(direction) or str(direction or "").strip().lower()
+        if not direction:
+            return False
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(observation or "").lower())
+        return bool(re.search(rf"\b{re.escape(direction)}\b", normalized))
+
+    def _navigation_safety_switch(self, location: str, direction: str,
+                                  observation: str, failed_this_visit: int) -> str:
+        if self._observation_mentions_direction(observation, direction):
+            return "observation_mention"
+        if self.kg_map.was_direction_confirmed(location, direction):
+            return "confirmed_history"
+        if (
+            self.kg_map.has_same_title_sibling(location)
+            or self.kg_map.room_fingerprint_conflicts(location, observation)
+        ):
+            return "identity_risk"
+        if failed_this_visit <= 0:
+            return "first_probe"
+        return ""
+
+    def _navigation_alternative_menu(self, exhausted_direction: str,
+                                     affordance_agenda: list) -> list[str]:
+        """Return compact untried/open exits followed by pending local commands."""
+        room_info = self.kg_map.get_current_room_info()
+        candidates = []
+        candidates.extend(room_info.get("may_direction", []) or [])
+        candidates.extend((room_info.get("directions", {}) or {}).keys())
+        for entry in affordance_agenda or []:
+            candidates.extend(entry.get("pending_commands", []) or [])
+
+        exhausted_direction = self._blocked_direction_for_command(exhausted_direction)
+        output = []
+        seen = set()
+        for candidate in candidates:
+            command = str(candidate or "").strip()
+            if not command:
+                continue
+            if self._blocked_direction_for_command(command) == exhausted_direction:
+                continue
+            key = normalize_command_key(command)
+            if key and key not in seen:
+                output.append(command)
+                seen.add(key)
+            if len(output) >= 8:
+                break
+        return output
+
+    def _apply_navigation_enforcement(self, command: str, raw_llm_response: str,
+                                      repeat_check: dict, prompt: str,
+                                      observation: str,
+                                      affordance_agenda: list) -> tuple:
+        """Rate-limit repeated rejected exits without permanently prohibiting them."""
+        debug = self._empty_navigation_guard_debug()
+        debug["final_command"] = command
+        direction = self._blocked_direction_for_command(command)
+        if not direction:
+            return command, raw_llm_response, repeat_check, debug
+
+        location = self.kg_map.current_location or "unknown"
+        record = self._visit_direction_record(location, direction)
+        failed_this_visit = int(record.get("count", 0)) if record else 0
+        last_step = int(record.get("last_step", 0)) if record else 0
+        last_message = str(record.get("last_message", "")) if record else ""
+        debug.update({
+            "direction": direction,
+            "failed_this_visit": failed_this_visit,
+            "last_message": last_message,
+            "last_failed_steps_ago": (
+                max(0, int(self.step_count) - last_step) if last_step else None
+            ),
+        })
+
+        safety_switch = self._navigation_safety_switch(
+            location=location,
+            direction=direction,
+            observation=observation,
+            failed_this_visit=failed_this_visit,
+        )
+        if safety_switch:
+            debug["safety_switch"] = safety_switch
+            return command, raw_llm_response, repeat_check, debug
+
+        if failed_this_visit >= 1 and not record.get("adjudicated"):
+            debug["triggered"] = True
+            debug["layer"] = 2
+            record["adjudicated"] = True
+            recency = debug["last_failed_steps_ago"]
+            adjudication_prompt = (
+                f"{prompt}\n\n"
+                "NAVIGATION CHECK:\n"
+                f"You chose '{command}'. That exact direction failed in this room "
+                f"during this visit {failed_this_visit} time(s), most recently "
+                f"{recency} step(s) ago, with: {json.dumps(last_message, ensure_ascii=False)}.\n"
+                "If you have a concrete, currently-observable reason to retry it, "
+                "answer with the same command and state that reason. Otherwise "
+                "choose a different command."
+            )
+            adjudication_raw = self.llm.chat(
+                system_prompt="You are an expert player of text-based interactive fiction games.",
+                user_prompt=adjudication_prompt,
+                think=True,
+            )
+            adjudicated_command = self._parse_command(adjudication_raw)
+            insisted = self._blocked_direction_for_command(adjudicated_command) == direction
+            debug["adjudication_raw_response"] = adjudication_raw
+            debug["adjudicated_insisted"] = insisted
+            command = adjudicated_command
+            raw_llm_response = adjudication_raw
+            repeat_check = self._parse_repeat_check(adjudication_raw)
+            debug["final_command"] = command
+            return command, raw_llm_response, repeat_check, debug
+
+        if (
+            failed_this_visit >= 2
+            and record.get("adjudicated")
+            and not record.get("menu_adjudicated")
+        ):
+            debug["triggered"] = True
+            debug["layer"] = 3
+            record["menu_adjudicated"] = True
+            menu = self._navigation_alternative_menu(direction, affordance_agenda)
+            debug["menu_offered"] = menu
+            menu_text = json.dumps(menu, ensure_ascii=False) if menu else "[]"
+            menu_prompt = (
+                f"{prompt}\n\n"
+                "NAVIGATION CHECK:\n"
+                f"Direction '{direction}' is exhausted for this visit after "
+                f"{failed_this_visit} fresh failure(s). Choose one of: {menu_text}. "
+                "Return one executable command."
+            )
+            menu_raw = self.llm.chat(
+                system_prompt="You are an expert player of text-based interactive fiction games.",
+                user_prompt=menu_prompt,
+                think=True,
+            )
+            menu_command = self._parse_command(menu_raw)
+            insisted = self._blocked_direction_for_command(menu_command) == direction
+            debug["menu_raw_response"] = menu_raw
+            debug["adjudication_raw_response"] = menu_raw
+            debug["adjudicated_insisted"] = insisted
+            raw_llm_response = menu_raw
+            if insisted:
+                command = menu[0] if menu else "look"
+                record["menu_substituted"] = True
+                debug["substituted_command"] = command
+                repeat_check = {
+                    "is_repeat": False,
+                    "reason": (
+                        "Visit-scoped navigation rate limit selected an offered alternative "
+                        "after repeated fresh failures."
+                    ),
+                }
+            else:
+                command = menu_command
+                repeat_check = self._parse_repeat_check(menu_raw)
+            debug["final_command"] = command
+            return command, raw_llm_response, repeat_check, debug
+
+        return command, raw_llm_response, repeat_check, debug
+
+    def _prompt_kg_map_context(self) -> str:
+        """Render prompt-facing KG JSON with evidence-rich blocked exits."""
+        context = self.kg_map.to_clean_dict()
+        room_state = context.get("current_room_state", {})
+        location = self.kg_map.current_location or "unknown"
+        room_info = self.kg_map.get_current_room_info()
+        ledger_records = self.attempt_ledger.counts_for_location(location)
+        enriched = []
+        for direction in room_info.get("blocked_directions", []) or []:
+            direction = self._blocked_direction_for_command(direction) or str(direction)
+            visit_record = self._visit_direction_record(location, direction)
+            ledger_record = {}
+            for candidate in ledger_records.values():
+                if self._blocked_direction_for_command(candidate.get("command", "")) != direction:
+                    continue
+                if int(candidate.get("last_step", 0)) >= int(ledger_record.get("last_step", 0)):
+                    ledger_record = candidate
+            last_step = int(visit_record.get("last_step", 0) or 0)
+            last_message = str(visit_record.get("last_message", "") or "")
+            if not last_message:
+                last_message = str(ledger_record.get("last_observation", "") or "")
+                last_step = int(ledger_record.get("last_step", 0) or 0)
+            enriched.append({
+                "direction": direction,
+                "failed_this_visit": int(visit_record.get("count", 0) or 0),
+                "last_message": last_message,
+                "last_failed_steps_ago": (
+                    max(0, int(self.step_count) - last_step) if last_step else None
+                ),
+            })
+        room_state["blocked_exits"] = enriched
+        context["current_room_state"] = room_state
+        return json.dumps(context, indent=2, ensure_ascii=False)
 
     def _is_location_change_action(self, action: str, action_valid) -> bool:
         """True when a room title in the response may update current location."""

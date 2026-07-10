@@ -207,7 +207,7 @@ LPLH_ACTION_GENERATION_PROMPT = """<START OF INSTRUCTIONS>
 **Principles for Exploration, Puzzle-Solving, and Earning Points**
 1. **Analyze the Current Game State**
 - **Room & Map Details**: Assess where you are, noting any exits, known layout, and significant objects.
-- **Blocked Exits**: If the current room state lists blocked_exits, do not choose those same directions from this exact room unless the map or room state explicitly changed.
+- **Blocked Exits**: Each blocked_exits entry includes recent game evidence and the number of failures during this contiguous room visit. A rejected exit may be re-tested once per visit when there is a concrete reason, such as changed state, a newly carried item, or an explicit direction hint in the current observation. Repeating it again within the same visit after fresh failures is usually wasteful.
 - **Recent Attempts**: Reflect on the previous actions, the motivation of taking that action and observation after this attempt.
 - **Inventory Check**: Identify items on hand (keys, tools, etc.) that might solve current puzzles or overcome obstacles.
 - **Stored Situations**: Review unresolved hazards/blockers from earlier. If your current location, inventory, or known map makes one actionable now, consider addressing it; otherwise continue useful exploration.
