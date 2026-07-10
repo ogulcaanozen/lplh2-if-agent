@@ -259,9 +259,12 @@ class LPLHAgent:
                             from_location=prev_location or "",
                             action=completed_action,
                         )
-                    title_key = self._normalize_event_piece(room_title)
-                    fm_key = self._normalize_event_piece(fm_location)
-                    current_key = self._normalize_event_piece(self.kg_map.current_location or "")
+                    title_key = normalize_location_key(room_title) or "unknown"
+                    fm_key = normalize_location_key(fm_location) or "unknown"
+                    current_key = (
+                        normalize_location_key(self.kg_map.current_location or "")
+                        or "unknown"
+                    )
                     may_apply_title = (
                         movement_location_candidate
                         or not self.kg_map.current_location
@@ -280,8 +283,11 @@ class LPLHAgent:
                         applied_triples = self._without_location_triples(applied_triples)
                         kg_location_resolution["remote_room_title_ignored"] = room_title
                 elif fm_location and not movement_location_candidate:
-                    fm_key = self._normalize_event_piece(fm_location)
-                    current_key = self._normalize_event_piece(self.kg_map.current_location or "")
+                    fm_key = normalize_location_key(fm_location) or "unknown"
+                    current_key = (
+                        normalize_location_key(self.kg_map.current_location or "")
+                        or "unknown"
+                    )
                     if self.kg_map.current_location and fm_key != current_key:
                         applied_triples = self._without_location_triples(applied_triples)
                         kg_location_resolution["remote_fm_location_ignored"] = fm_location
@@ -1249,7 +1255,8 @@ class LPLHAgent:
     def _first_known_location(self, *candidates: str) -> str:
         for candidate in candidates:
             text = self._clean_text(candidate)
-            if text and self._normalize_event_piece(text) != "unknown":
+            location_key = normalize_location_key(text)
+            if text and location_key and location_key != "unknown":
                 return text
         return "Starting Location"
 
@@ -1790,8 +1797,8 @@ class LPLHAgent:
               and prev_lower not in self.kg_map._direction_set()):
             room_title = self._extract_observation_room_title(observation)
             if room_title:
-                current_key = self._normalize_event_piece(location or "")
-                title_key = self._normalize_event_piece(room_title)
+                current_key = normalize_location_key(location or "") or "unknown"
+                title_key = normalize_location_key(room_title) or "unknown"
                 if title_key and title_key != current_key:
                     action_transition_candidate = {
                         "from": prev_location,
@@ -2735,14 +2742,14 @@ class LPLHAgent:
         condition-level problems where several different commands produce
         similarly distorted, blocked, or mismatched observations.
         """
-        target = self._normalize_event_piece(location or "unknown")
+        target = normalize_location_key(location or "unknown") or "unknown"
         outcomes: list[dict] = []
         seen: set[tuple[str, str]] = set()
 
         def add(command: str, observation: str, source_location: str):
             if not command or not observation:
                 return
-            if self._normalize_event_piece(source_location) != target:
+            if (normalize_location_key(source_location) or "unknown") != target:
                 return
             clean_command = self._clean_text(command)[:80]
             clean_observation = self._clean_text(observation)[:180]
@@ -3568,11 +3575,11 @@ class LPLHAgent:
                            failed_attempts: list = None) -> str:
         """Build a stable key for neutral-summary dedup across epochs."""
         trigger_norm = self._normalize_event_piece(trigger)
-        action_norm = self._normalize_event_piece(action)
-        location_norm = self._normalize_event_piece(location)
+        action_norm = normalize_command_key(action) or "unknown"
+        location_norm = normalize_location_key(location) or "unknown"
 
         if trigger_norm == "navigation":
-            prev_norm = self._normalize_event_piece(prev_location or "unknown")
+            prev_norm = normalize_location_key(prev_location or "unknown") or "unknown"
             return f"neutral:v1:navigation:{prev_norm}:{action_norm}:{location_norm}"
 
         if trigger_norm in {"narrative", "environmental"}:
@@ -3581,7 +3588,7 @@ class LPLHAgent:
 
         if trigger_norm == "error_correction":
             failed_norm = " > ".join(
-                self._normalize_event_piece(a) for a in (failed_attempts or [])
+                normalize_command_key(a) or "unknown" for a in (failed_attempts or [])
             )
             failed_sig = self._event_text_signature(failed_norm)
             return f"neutral:v1:error_correction:{location_norm}:{action_norm}:{failed_sig}"
@@ -3593,8 +3600,8 @@ class LPLHAgent:
                          reward_change: int) -> str:
         """Build a stable key for score-gain summary dedup across epochs."""
         trigger_norm = self._normalize_event_piece(trigger)
-        action_norm = self._normalize_event_piece(action)
-        location_norm = self._normalize_event_piece(location)
+        action_norm = normalize_command_key(action) or "unknown"
+        location_norm = normalize_location_key(location) or "unknown"
         return (
             f"score:v1:{trigger_norm}:{location_norm}:"
             f"{action_norm}:{int(reward_change or 0)}"
@@ -3602,8 +3609,8 @@ class LPLHAgent:
 
     def _death_event_key(self, action: str, location: str) -> str:
         """Build a stable key for fatal-action summary dedup across epochs."""
-        action_norm = self._normalize_event_piece(action)
-        location_norm = self._normalize_event_piece(location)
+        action_norm = normalize_command_key(action) or "unknown"
+        location_norm = normalize_location_key(location) or "unknown"
         return f"death:v1:{location_norm}:{action_norm}"
 
     def _classify_death(self, done: bool, reward_change: int,
@@ -3627,7 +3634,7 @@ class LPLHAgent:
         ))
 
     def _score_location_reward_key(self, location: str, reward_change: int) -> str:
-        location_norm = self._normalize_event_piece(location)
+        location_norm = normalize_location_key(location) or "unknown"
         return f"score_location_reward:v1:{location_norm}:{int(reward_change or 0)}"
 
     def _store_reward_enabler_experiences(self, score_event_key: str,
@@ -3720,8 +3727,8 @@ class LPLHAgent:
 
         def contains_facts(text: str) -> bool:
             normalized = self._normalize_event_piece(text)
-            action_norm = self._normalize_event_piece(scoring_action)
-            location_norm = self._normalize_event_piece(location_issued)
+            action_norm = normalize_command_key(scoring_action) or "unknown"
+            location_norm = normalize_location_key(location_issued) or "unknown"
             return action_norm in normalized and location_norm in normalized
 
         if contains_facts(summary):
@@ -3759,7 +3766,11 @@ class LPLHAgent:
 
     def _normalize_event_piece(self, text: str) -> str:
         text = (text or "").lower()
-        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(
+            r"</?(?:loc|step|obj|room|tag|dif|scoring_fact)\b[^>]*>",
+            " ",
+            text,
+        )
         text = re.sub(r"[^a-z0-9]+", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text or "unknown"
