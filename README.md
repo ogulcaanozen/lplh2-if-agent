@@ -2,7 +2,20 @@
 
 Experimental LPLH2 framework for text-based interactive fiction agents.
 
-This repo contains the `lplh2` package and the Colab experiment notebook used for the Zork1 runs. It intentionally does **not** include game ROMs, Chroma databases, run logs, Drive data, API keys, or LoRA adapter weights.
+This repo contains the `lplh2` package and Colab experiment notebooks used for
+interactive-fiction runs. It intentionally does **not** include game ROMs,
+Chroma databases, run logs, Drive data, API keys, or LoRA adapter weights.
+
+## Current Main Version
+
+The current thesis/testing baseline is:
+
+```text
+versions/lplh2_enabler_agenda_retrieval_patch_2026-07-07
+```
+
+See `MAIN_VERSION.md` for the authoritative designation and included patch
+level. The root Colab notebook selects this version from GitHub.
 
 ## Contents
 

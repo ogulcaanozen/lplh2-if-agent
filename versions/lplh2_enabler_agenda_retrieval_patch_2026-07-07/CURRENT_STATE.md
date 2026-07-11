@@ -1,8 +1,8 @@
 # Current State
 
-Last updated: 2026-07-07
+Last updated: 2026-07-11
 
-This folder is the current enabler / agenda retrieval experiment:
+This folder is the current main LPLH2 version and thesis/testing baseline:
 
 ```text
 versions/lplh2_enabler_agenda_retrieval_patch_2026-07-07
@@ -38,6 +38,15 @@ versions/lplh2_grounded_memory_retrieval_patch_2026-07-07
 - Confirmed blocked-exit tracking plus one-shot regeneration before executing a
   repeated blocked direction.
 - Dedicated retrieved-summary logging for every action-generation prompt.
+- Terminal defeat/victory classification that does not depend on a score loss.
+- Deterministic early-epoch retrieval of unearned starting achievements.
+- Visit-scoped repeated blocked-navigation adjudication and bounded alternative
+  generation, while preserving explicit route hints from game text.
+- Event-key normalization that preserves bracketed room titles such as
+  `<< Outside >>` and distinguishes fingerprinted same-title rooms.
+- Exact physical-room experience retrieval: achievements, enablers, death
+  warnings, routes, and neutral memories are not borrowed from neighboring or
+  destination rooms.
 
 ## Not Included
 
@@ -49,7 +58,7 @@ versions/lplh2_grounded_memory_retrieval_patch_2026-07-07
 ## Runtime Defaults
 
 The root convenience notebook and this version's notebook point to this folder.
-They are configured for the Zork1 experiment setup with:
+The current notebook is configured for the Detective experiment with:
 
 - `10` epochs,
 - `250` max steps per epoch,

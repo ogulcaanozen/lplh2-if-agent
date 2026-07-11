@@ -1,15 +1,20 @@
-# Main LPLH2 Version
+# Historical Main LPLH2 Version
 
-Current main version as of 2026-07-03:
+This folder was the main version from 2026-07-03 until 2026-07-11:
 
 ```text
 versions/lplh2_inv_gate_worldstate_selective_2026-07-02
 ```
 
-This is the thesis/testing baseline unless a newer version is explicitly marked
-as main.
+It is retained unchanged as the selective 45-point historical baseline. The
+current main version is declared in the repository-level `MAIN_VERSION.md` and
+is:
 
-## Why This Version Is Main
+```text
+versions/lplh2_enabler_agenda_retrieval_patch_2026-07-07
+```
+
+## Why This Version Was Main
 
 This version gave strong Zork1 performance while staying simpler than the
 dynamic-planning branches. It starts from the higher-performing
@@ -109,4 +114,4 @@ Each experiment should create:
 - `kg_location_log.txt`
 - `module_timing_log.txt`
 
-The root Colab notebook currently points to this version.
+The root Colab notebook no longer points to this version.
