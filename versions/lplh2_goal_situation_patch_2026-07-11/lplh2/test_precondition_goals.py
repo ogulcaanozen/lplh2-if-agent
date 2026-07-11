@@ -212,6 +212,88 @@ class PreconditionGoalTests(unittest.TestCase):
         self.assertEqual(stored["confirmed_inventory"], ["shield", "lamp"])
         self.assertEqual(stored["goal_id"], goal["goal_id"])
 
+    def test_leaving_alive_without_requirement_keeps_goal_open(self):
+        agent = self._agent()
+        _, goal, _ = agent.situation_memory.add_goal_situation(
+            "Hazard Room",
+            agent._location_fingerprint_hash("Hazard Room"),
+            "west",
+            requires=["shield"],
+        )
+        agent._update_goal_visit_lifecycle(
+            "Back Room", "Hazard Room", False, ["lamp"]
+        )
+        transitions = agent._update_goal_visit_lifecycle(
+            "Hazard Room", "Back Room", False, ["lamp"]
+        )
+        self.assertEqual(transitions[0]["type"], "survived_unprepared")
+        self.assertEqual(transitions[0]["status"], "goal_kept_open")
+        stored = agent.situation_memory.goal_situations()[0]
+        self.assertEqual(stored["status"], "untested")
+        self.assertEqual(stored["goal_id"], goal["goal_id"])
+
+    def test_death_after_confirmation_reopens_and_revises_goal(self):
+        agent = self._agent([_hypothesis(True, ["shield"], "prepare again")])
+        _, goal, _ = agent.situation_memory.add_goal_situation(
+            "Hazard Room",
+            agent._location_fingerprint_hash("Hazard Room"),
+            "west",
+            requires=["shield"],
+            last_death_inventory=[],
+            deaths=2,
+        )
+        agent.situation_memory.confirm_goal(goal["goal_id"], ["shield"])
+        transition, _ = self._trigger(agent, inventory=[])
+        self.assertEqual(len(agent.llm.calls), 1)
+        self.assertEqual(
+            transition["confirmation_contradiction"]["status"],
+            "reopened",
+        )
+        self.assertEqual(transition["status"], "updated")
+        stored = agent.situation_memory.goal_situations()[0]
+        self.assertEqual(stored["status"], "untested")
+        self.assertEqual(stored["confirmed_inventory"], [])
+
+    def test_fatal_movement_uses_destination_as_hazard_and_source_as_gateway(self):
+        agent = self._agent()
+        agent.kg_map._ensure_node("Outside")
+        agent.kg_map._ensure_node("Deadly House")
+        agent.kg_map.room_fingerprints["Outside"] = "outside crossroads"
+        agent.kg_map.room_fingerprints["Deadly House"] = "deadly house interior"
+        context = agent._goal_hazard_context(
+            action="east",
+            action_valid=True,
+            location_issued="Outside",
+            location_after="Deadly House",
+        )
+        self.assertEqual(context["source"], "fatal_movement_destination")
+        self.assertEqual(context["hazard_location"], "Deadly House")
+        self.assertEqual(context["gateway"]["room"], "Outside")
+        self.assertEqual(context["gateway"]["command"], "east")
+
+    def test_transiting_gateway_room_does_not_change_destination_goal(self):
+        agent = self._agent()
+        agent.kg_map._ensure_node("Outside")
+        agent.kg_map._ensure_node("Deadly House")
+        agent.kg_map._ensure_node("Street")
+        agent.kg_map.room_fingerprints["Outside"] = "outside crossroads"
+        agent.kg_map.room_fingerprints["Deadly House"] = "deadly house interior"
+        agent.kg_map.room_fingerprints["Street"] = "safe street"
+        _, goal, _ = agent.situation_memory.add_goal_situation(
+            "Deadly House",
+            agent._location_fingerprint_hash("Deadly House"),
+            "east",
+            gateway={"room": "Outside", "command": "east"},
+            requires=["protection"],
+        )
+        transitions = agent._update_goal_visit_lifecycle(
+            "Outside", "Street", False, []
+        )
+        self.assertEqual(transitions, [])
+        stored = agent.situation_memory.goal_situations()[0]
+        self.assertEqual(stored["goal_id"], goal["goal_id"])
+        self.assertEqual(stored["status"], "untested")
+
     def test_sixth_open_goal_is_refused(self):
         memory = SituationMemory()
         for index in range(5):

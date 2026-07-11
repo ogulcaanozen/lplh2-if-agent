@@ -307,6 +307,15 @@ class SituationMemory:
         goal["confirmed_inventory"] = self._clean_list(inventory)
         return {"status": "confirmed", "goal_id": goal_id}
 
+    def reopen_goal(self, goal_id: str) -> dict[str, Any]:
+        """Reopen a confirmed goal when a later death contradicts confirmation."""
+        goal = self._goal_situations.get(goal_id)
+        if not goal:
+            return {"status": "not_found"}
+        goal["status"] = "untested"
+        goal["confirmed_inventory"] = []
+        return {"status": "reopened", "goal_id": goal_id}
+
     def decline_goal(self, goal_id: str) -> dict[str, Any]:
         goal = self._goal_situations.get(goal_id)
         if not goal:

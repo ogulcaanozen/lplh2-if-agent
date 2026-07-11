@@ -18,6 +18,12 @@ lifecycle states.
 The patch does not change Chroma retrieval, event keys, or command selection,
 and it adds no game-specific rules.
 
+Confirmation requires the inventory captured on goal-room entry to match the
+current hypothesized requirement. Leaving alive without that preparation is
+treated as a retreat, not proof that the hazard was solved. A later death
+reopens any mistakenly confirmed goal. For fatal movement, the destination is
+the hazard room and the source room/action is stored as its gateway.
+
 ## Earlier enabler / agenda notes
 
 Created from:

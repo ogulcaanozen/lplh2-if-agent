@@ -617,15 +617,22 @@ class LPLHAgent:
                         f"{completed_action}"
                     )
                     if is_death:
+                        goal_hazard = self._goal_hazard_context(
+                            action=completed_action,
+                            action_valid=action_valid,
+                            location_issued=score_location,
+                            location_after=location_after,
+                        )
                         goal_transition, hypothesis_log = (
                             self._maybe_handle_repeated_death_goal(
                                 duplicate_death=True,
                                 event_key=event_key,
-                                hazard_location=score_location,
-                                hazard_fingerprint=score_location_fingerprint,
+                                hazard_location=goal_hazard["hazard_location"],
+                                hazard_fingerprint=goal_hazard["hazard_fingerprint"],
                                 fatal_action=completed_action,
                                 death_observation=observation,
                                 inventory_at_death=list(self.kg_map.inventory),
+                                gateway=goal_hazard.get("gateway"),
                             )
                         )
                         if goal_transition:
@@ -3630,6 +3637,36 @@ class LPLHAgent:
         result["active_situations_after"] = self.situation_memory.active_situations()
         return result
 
+    def _goal_hazard_context(self, action: str, action_valid,
+                             location_issued: str,
+                             location_after: str) -> dict:
+        """Resolve a repeated death's hazard room and its entry gateway."""
+        issued = self._first_known_location(location_issued, "Starting Location")
+        destination = self._first_known_location(location_after, issued)
+        moved_to_destination = (
+            action_valid is True
+            and self._is_location_change_action(action, action_valid)
+            and normalize_location_key(destination)
+            != normalize_location_key(issued)
+        )
+        if moved_to_destination:
+            return {
+                "hazard_location": destination,
+                "hazard_fingerprint": self._location_fingerprint_hash(destination),
+                "gateway": {
+                    "room": issued,
+                    "fingerprint": self._location_fingerprint_hash(issued),
+                    "command": self._clean_text(action) or "unknown",
+                },
+                "source": "fatal_movement_destination",
+            }
+        return {
+            "hazard_location": issued,
+            "hazard_fingerprint": self._location_fingerprint_hash(issued),
+            "gateway": None,
+            "source": "fatal_action_issuing_room",
+        }
+
     def _update_goal_visit_lifecycle(self, previous_location: str,
                                      current_location: str, done: bool,
                                      inventory: list) -> list[dict]:
@@ -3651,16 +3688,29 @@ class LPLHAgent:
                 goal_id,
                 list(inventory or []),
             )
-            result = self.situation_memory.confirm_goal(
-                goal_id,
+            if self._inventory_matches_requirements(
                 entry_inventory,
-            )
-            transitions.append({
-                "type": "confirmed",
-                "location": previous,
-                "inventory_at_entry": list(entry_inventory),
-                **result,
-            })
+                previous_goal.get("requires", []),
+            ):
+                result = self.situation_memory.confirm_goal(
+                    goal_id,
+                    entry_inventory,
+                )
+                transitions.append({
+                    "type": "confirmed",
+                    "location": previous,
+                    "inventory_at_entry": list(entry_inventory),
+                    **result,
+                })
+            else:
+                transitions.append({
+                    "type": "survived_unprepared",
+                    "status": "goal_kept_open",
+                    "goal_id": goal_id,
+                    "location": previous,
+                    "inventory_at_entry": list(entry_inventory),
+                    "requires": list(previous_goal.get("requires", [])),
+                })
 
         current_goal = self.situation_memory.find_goal_for_room(
             current,
@@ -3683,7 +3733,8 @@ class LPLHAgent:
                                      hazard_fingerprint: str,
                                      fatal_action: str,
                                      death_observation: str,
-                                     inventory_at_death: list) -> tuple[dict, dict]:
+                                     inventory_at_death: list,
+                                     gateway: dict = None) -> tuple[dict, dict]:
         """Turn repeated identical deaths into an advisory preparation goal."""
         inventory = [self._clean_text(item) for item in inventory_at_death or []]
         inventory = [item for item in inventory if item]
@@ -3698,6 +3749,7 @@ class LPLHAgent:
             "hazard_fingerprint": hazard_fingerprint,
             "fatal_action": fatal_action,
             "inventory_at_death": inventory,
+            "gateway": gateway or {},
             "status": "not_run",
         }
 
@@ -3705,25 +3757,26 @@ class LPLHAgent:
             transition["status"] = "skipped_declined"
             transition["goal_id"] = existing.get("goal_id", "")
             return transition, {}
-        if existing and existing.get("status") == "confirmed":
-            transition["status"] = "skipped_confirmed"
-            transition["goal_id"] = existing.get("goal_id", "")
-            return transition, {}
+        contradicted_confirmation = bool(
+            existing and existing.get("status") == "confirmed"
+        )
+        if contradicted_confirmation:
+            transition["confirmation_contradiction"] = (
+                self.situation_memory.reopen_goal(existing.get("goal_id", ""))
+            )
 
         previous_hypothesis = self._goal_hypothesis_snapshot(existing)
         previous_refutations = list((existing or {}).get("refutations", []))
         death_count = 2
         new_evidence = True
         if existing:
-            gateway = self._derive_goal_gateway(
-                hazard_location,
-                hazard_fingerprint,
-                fatal_action,
+            resolved_gateway = gateway or self._derive_goal_gateway(
+                hazard_location, hazard_fingerprint, fatal_action
             )
             transition["evidence_merge"] = self.situation_memory.merge_goal_evidence(
                 existing.get("goal_id", ""),
                 fatal_action=fatal_action,
-                gateway=gateway,
+                gateway=resolved_gateway,
                 hazard_text=self._clean_text(death_observation)[:320],
             )
             death_record = self.situation_memory.record_goal_death(
@@ -3735,6 +3788,9 @@ class LPLHAgent:
             transition["death_record"] = death_record
             death_count = int(death_record.get("deaths", existing.get("deaths", 2)))
             new_evidence = bool(death_record.get("new_evidence"))
+            if contradicted_confirmation:
+                new_evidence = True
+                transition["death_record"]["new_evidence"] = True
             if existing.get("status") == "avoid":
                 transition["status"] = "avoid_recorded"
                 return transition, {}
@@ -3810,16 +3866,14 @@ class LPLHAgent:
             transition["goal_id"] = goal_id
             return transition, log_entry
 
-        gateway = self._derive_goal_gateway(
-            hazard_location,
-            hazard_fingerprint,
-            fatal_action,
+        resolved_gateway = gateway or self._derive_goal_gateway(
+            hazard_location, hazard_fingerprint, fatal_action
         )
         created, goal, status = self.situation_memory.add_goal_situation(
             hazard_location=hazard_location,
             hazard_fingerprint=hazard_fingerprint,
             fatal_action=fatal_action,
-            gateway=gateway,
+            gateway=resolved_gateway,
             hazard_text=hazard_text,
             requires=parsed.get("requires", []),
             advice=parsed.get("advice", ""),
@@ -3832,7 +3886,7 @@ class LPLHAgent:
             "created": created,
             "goal": goal or {},
             "goal_id": (goal or {}).get("goal_id", ""),
-            "gateway": gateway,
+            "gateway": resolved_gateway,
         })
         if goal and not parsed.get("preparable"):
             transition["goal_update"] = self.situation_memory.decline_goal(

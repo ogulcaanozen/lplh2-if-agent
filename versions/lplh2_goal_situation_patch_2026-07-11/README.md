@@ -18,7 +18,11 @@ New in this version:
 - goals merge by hazard-room fingerprint, retain gateway/fatal-action evidence,
   survive normal epoch resets, and are capped at five open entries;
 - leaving a goal room alive confirms the goal and removes it from the active
-  feed; changed death inventories can refute and revise the hypothesis;
+  feed only when the entry inventory matches the hypothesized requirement;
+- an unprepared retreat leaves the goal open, while a later contradictory
+  death reopens a previously confirmed goal and revises its hypothesis;
+- fatal movement events key the goal to the destination hazard and preserve
+  the issuing room/action as the gateway;
 - goal transitions and hypothesis prompt/response records are written to the
   existing situation and summary logs;
 
