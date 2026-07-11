@@ -1,0 +1,50 @@
+# LPLH2 Goal-Situation Patch
+
+Experimental LPLH2 framework for text-based interactive fiction agents.
+
+This snapshot is `lplh2_goal_situation_patch_2026-07-11`. It starts from the
+current main version, `lplh2_enabler_agenda_retrieval_patch_2026-07-07`, and
+keeps all of its navigation, memory-retrieval, event-key, inventory, KG,
+brainstorming, and logging fixes.
+
+New in this version:
+
+- `SituationMemory` has a second `goal` class for persistent preparation
+  requirements inferred from repeated identical deaths;
+- the first death still creates the normal place-bound warning, while a
+  duplicate death can trigger one precondition-hypothesis LLM call;
+- open goals are advisory and visible through the existing situations channel
+  everywhere until confirmed, declined, or downgraded to avoid;
+- goals merge by hazard-room fingerprint, retain gateway/fatal-action evidence,
+  survive normal epoch resets, and are capped at five open entries;
+- leaving a goal room alive confirms the goal and removes it from the active
+  feed; changed death inventories can refute and revise the hypothesis;
+- goal transitions and hypothesis prompt/response records are written to the
+  existing situation and summary logs;
+
+- filtered summary retrieval returns an empty result when a query succeeds but
+  finds no matches, instead of falling back to unrelated recent memories;
+- experience retrieval is a true cap of up to `5` useful summaries, not a forced
+  quota;
+- reward enabler summaries are stored from recent state-changing setup actions
+  before a score gain, linked to the same score event key as the achievement;
+- enabler summaries are hidden for the current epoch once the linked reward has
+  been earned;
+- completed pending agenda commands are consumed when the ledger shows they
+  already caused a state change, movement, or score;
+- brainstorm carryover relevance uses the current observation text plus visible
+  objects, instead of letting inventory keep stale acquisition ideas alive;
+- fresh brainstorm ideas outrank carried ideas when merged;
+- confirmed blocked directions are tracked in the KG and trigger one action
+  regeneration if the main LLM selects the same blocked direction again;
+- the initial room receives a description fingerprint, and empty same-title
+  fingerprints are adopted instead of creating spurious `#2` rooms.
+
+Still not included in this version:
+
+- active planning/BFS execution;
+- a new separate agenda module;
+- parser noun canonicalization as a dedicated fix.
+
+The repo excludes game ROMs, Chroma databases, logs, Drive data, API keys, and
+LoRA adapter weights.
