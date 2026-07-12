@@ -15,7 +15,8 @@ versions/lplh2_goal_situation_roomlevel_patch_2026-07-12
 ```
 
 See `MAIN_VERSION.md` for the authoritative designation and included patch
-level. The root Colab notebook selects this version from GitHub.
+level. The root Colab notebook can temporarily select a newer experimental
+snapshot without changing the main-version designation.
 
 ## Contents
 

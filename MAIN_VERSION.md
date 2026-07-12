@@ -6,8 +6,8 @@ Current main version as of 2026-07-12:
 versions/lplh2_goal_situation_roomlevel_patch_2026-07-12
 ```
 
-This is the thesis/testing baseline and the version selected by the root Colab
-experiment notebook. Older folders under `versions/` are preserved as
+This is the thesis/testing baseline. The root Colab experiment notebook may
+temporarily pin a newer experimental snapshot for evaluation. Older folders under `versions/` are preserved as
 historical snapshots and should not be modified when changing the main version.
 
 The main-version designation includes all patches through commit `ca23348`:
