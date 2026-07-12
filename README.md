@@ -11,7 +11,7 @@ Chroma databases, run logs, Drive data, API keys, or LoRA adapter weights.
 The current thesis/testing baseline is:
 
 ```text
-versions/lplh2_enabler_agenda_retrieval_patch_2026-07-07
+versions/lplh2_goal_situation_roomlevel_patch_2026-07-12
 ```
 
 See `MAIN_VERSION.md` for the authoritative designation and included patch
