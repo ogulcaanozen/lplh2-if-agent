@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+.wsl_venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Experiment data and logs
+data/
+logs/
+chroma_db/
+experience_index/
+results_*.json
+steplog_*.json
+run_log*.txt
+summary_module_log*.txt
+situation_memory_log*.txt
+affordance_brainstorm_log*.txt
+action_failure_memory_log*.txt
+action_generation_log*.txt
+
+# Game ROMs are not redistributed in this repo.
+games/
+*.z3
+*.z5
+*.z6
+*.z8
+
+# Local model artifacts / adapters can be large.
+fm_adapter*/
+checkpoints/
+models/
