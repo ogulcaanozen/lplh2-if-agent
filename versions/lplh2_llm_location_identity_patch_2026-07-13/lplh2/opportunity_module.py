@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any, Optional
 
+from .kg_map import canonical_room_display
+
 
 class SituationMemory:
     """Store epoch-local observations and persistent preparation goals."""
@@ -141,7 +143,9 @@ class SituationMemory:
     def add(self, situation: dict[str, str]) -> tuple[bool, dict[str, str]]:
         """Add a situation if not already present."""
         normalized = {
-            "location": self._clean_field(situation.get("location")) or "unknown",
+            "location": canonical_room_display(
+                self._clean_field(situation.get("location"))
+            ) or "unknown",
             "situation": self._clean_field(situation.get("situation")) or "",
             "possible_solution": self._clean_field(situation.get("possible_solution")) or "",
         }
@@ -171,17 +175,13 @@ class SituationMemory:
         last_death_inventory: Optional[list[str]] = None,
         created_epoch: int = 1,
         deaths: int = 1,
-        hazard_room_num=None,
     ) -> tuple[bool, Optional[dict[str, Any]], str]:
         """Create or merge a persistent goal for one hazardous room."""
-        location = self._clean_field(hazard_location) or "unknown"
+        location = canonical_room_display(
+            self._clean_field(hazard_location)
+        ) or "unknown"
         fingerprint = self._clean_field(hazard_fingerprint)
-        existing = self.find_goal_for_room(
-            location,
-            fingerprint,
-            open_only=True,
-            hazard_room_num=hazard_room_num,
-        )
+        existing = self.find_goal_for_room(location, fingerprint, open_only=True)
         if existing:
             self._append_unique(existing["fatal_actions"], fatal_action)
             self._append_gateway(existing["gateways"], gateway)
@@ -215,7 +215,6 @@ class SituationMemory:
             "goal_id": goal_id,
             "hazard_location": location,
             "hazard_fingerprint": fingerprint,
-            "hazard_room_num": hazard_room_num,
             "fatal_actions": [],
             "gateways": [],
             "hazard_text": self._clean_field(hazard_text),
@@ -238,8 +237,7 @@ class SituationMemory:
         return True, self._copy_goal(goal), "created"
 
     def find_goal_for_room(self, location: str, fingerprint: str = "",
-                           open_only: bool = False,
-                           hazard_room_num=None) -> Optional[dict[str, Any]]:
+                           open_only: bool = False) -> Optional[dict[str, Any]]:
         """Find a goal by stable hazard-room identity."""
         for goal in self._goal_situations.values():
             if open_only and (
@@ -251,8 +249,6 @@ class SituationMemory:
                 goal.get("hazard_fingerprint", ""),
                 location,
                 fingerprint,
-                goal.get("hazard_room_num"),
-                hazard_room_num,
             ):
                 return goal
         return None
@@ -491,13 +487,7 @@ class SituationMemory:
         }
 
     def _same_room(self, left_location: str, left_fingerprint: str,
-                   right_location: str, right_fingerprint: str,
-                   left_num=None, right_num=None) -> bool:
-        if left_num is not None and right_num is not None:
-            try:
-                return int(left_num) == int(right_num)
-            except (TypeError, ValueError):
-                pass
+                   right_location: str, right_fingerprint: str) -> bool:
         left_fp = self._clean_field(left_fingerprint)
         right_fp = self._clean_field(right_fingerprint)
         if left_fp and right_fp:

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def canonical_room_display(raw_title: str) -> str:
-    """Normalize room-title decoration at the single KG display chokepoint."""
+    """Normalize display decoration without erasing a stable ``#N`` suffix."""
     text = re.sub(r"\s+", " ", str(raw_title or "")).strip()
     suffix_match = re.search(r"\s+(#\d+)\s*$", text)
     suffix = f" {suffix_match.group(1)}" if suffix_match else ""
@@ -34,7 +34,8 @@ class KGMap:
     - Properties = objects, requirements per location
     """
 
-    def __init__(self):
+    def __init__(self, strict_location_authority: bool = False):
+        self.strict_location_authority = bool(strict_location_authority)
         self.nodes = {}           # {location_name: {objects, directions, ...}}
         self.location_aliases = {} # {normalized_location_key: display_name}
         self.current_location = None
@@ -43,13 +44,16 @@ class KGMap:
         self.room_fingerprints = {}  # {room_node: normalized description signature}
         self.room_description_fingerprints = {}  # full description, used only as an identity-risk signal
         self._confirmed_direction_history = {}  # {room_node: {canonical directions}}
-        self.room_registry = {}  # {engine object num: stable naming metadata}
-        self.node_nums = {}      # {prompt-visible label: engine object num}
-        self.num_labels = {}     # persistent {engine object num: stable label}
-        self.engine_grounded = False
+        self.room_registry = {}  # persistent {rN: text-derived naming evidence}
+        self.node_registry_ids = {}  # epoch-local {room label: rN}
+        self._registry_counter = 0
+        self._visit_counter = 0
+        self._current_visit_id = 0
+        self._visit_blocked_writes = {}
+        self.location_uncertain = False
 
     def reset(self, full: bool = False):
-        """Reset epoch world state while optionally preserving room identities."""
+        """Reset epoch state; preserve text-derived room naming across epochs."""
         self.nodes = {}
         self.location_aliases = {}
         self.current_location = None
@@ -58,13 +62,16 @@ class KGMap:
         self.room_fingerprints = {}
         self.room_description_fingerprints = {}
         self._confirmed_direction_history = {}
-        self.node_nums = {}
-        self.engine_grounded = False
+        self.node_registry_ids = {}
+        self._visit_counter = 0
+        self._current_visit_id = 0
+        self._visit_blocked_writes = {}
+        self.location_uncertain = False
         if full:
             self.room_registry = {}
-            self.num_labels = {}
+            self._registry_counter = 0
 
-    def update(self, triples: list, action: str = "", engine_grounded: bool = False):
+    def _legacy_update(self, triples: list, action: str = ""):
         """Update the knowledge graph with extracted triples.
 
         Args:
@@ -74,12 +81,11 @@ class KGMap:
         if not triples:
             return
 
-        new_location = self.current_location if engine_grounded else None
-        if not engine_grounded:
-            for subj, rel, obj in triples:
-                if subj.strip().lower() == "you" and rel.strip().lower() == "in":
-                    new_location = self._ensure_node(obj.strip())
-                    break
+        new_location = None
+        for subj, rel, obj in triples:
+            if subj.strip().lower() == "you" and rel.strip().lower() == "in":
+                new_location = self._ensure_node(obj.strip())
+                break
 
         for subj, rel, obj in triples:
             rel_lower = rel.strip().lower()
@@ -88,14 +94,13 @@ class KGMap:
 
             # Handle location updates: <You, in, Location>
             if subj_clean.lower() == "you" and rel_lower == "in":
-                if not engine_grounded:
-                    new_location = self._ensure_node(obj_clean)
+                new_location = self._ensure_node(obj_clean)
 
             # Handle objects in location: <Location, have, object>
             elif rel_lower == "have":
-                loc = (self._engine_triple_room(subj_clean)
-                       if engine_grounded else self._resolve_location_subject(subj_clean, new_location))
+                loc = self._resolve_location_subject(subj_clean, new_location)
                 if loc:
+                    loc = self._ensure_node(loc)
                     if (self._should_store_room_object(loc, obj_clean)
                             and obj_clean not in self.nodes[loc]["have"]):
                         self.nodes[loc]["have"].append(obj_clean)
@@ -105,14 +110,10 @@ class KGMap:
 
             # Handle directional connections: <Location, direction, Destination>
             elif rel_lower in self._direction_set():
-                loc = (self._engine_triple_room(subj_clean)
-                       if engine_grounded else self._resolve_location_subject(subj_clean, new_location))
+                loc = self._resolve_location_subject(subj_clean, new_location)
                 if loc:
+                    loc = self._ensure_node(loc)
                     direction = self._canonical_direction(rel_lower)
-                    if engine_grounded:
-                        if direction not in self.nodes[loc]["may_direction"]:
-                            self.nodes[loc]["may_direction"].append(direction)
-                        continue
                     if self._is_placeholder_destination(obj_clean, direction):
                         if direction not in self.nodes[loc]["may_direction"]:
                             self.nodes[loc]["may_direction"].append(direction)
@@ -127,9 +128,9 @@ class KGMap:
 
             # Handle requirements: <Location, need/require, action>
             elif rel_lower in ("need", "require"):
-                loc = (self._engine_triple_room(subj_clean)
-                       if engine_grounded else self._resolve_location_subject(subj_clean, new_location))
+                loc = self._resolve_location_subject(subj_clean, new_location)
                 if loc:
+                    loc = self._ensure_node(loc)
                     if obj_clean not in self.nodes[loc].get("needs", []):
                         self.nodes[loc].setdefault("needs", []).append(obj_clean)
                 else:
@@ -147,7 +148,7 @@ class KGMap:
                                                 subj_clean, rel_lower, obj_clean)
 
         # Update current location if changed
-        if new_location and not engine_grounded:
+        if new_location:
             self.current_location = new_location
             if new_location not in self.visited_rooms:
                 self.visited_rooms.append(new_location)
@@ -157,10 +158,63 @@ class KGMap:
         for carried in self.inventory:
             self._remove_item_from_world(carried.lower())
 
+    def update(self, triples: list, action: str = ""):
+        """Apply FM facts only to the room selected by text-based resolution.
+
+        ``You in X`` and free-text destinations are intentionally inert here.
+        This keeps room minting and movement under one arrival authority.
+        """
+        if not self.strict_location_authority:
+            return self._legacy_update(triples, action)
+        if not triples or not self.current_location:
+            return
+        for subj, rel, obj in triples:
+            rel_lower = str(rel or "").strip().lower()
+            subj_clean = str(subj or "").strip()
+            obj_clean = str(obj or "").strip()
+            if subj_clean.lower() == "you" and rel_lower == "in":
+                continue
+            loc = self._resolve_location_subject(subj_clean)
+            if rel_lower == "have":
+                if loc:
+                    if (self._should_store_room_object(loc, obj_clean)
+                            and obj_clean not in self.nodes[loc]["have"]):
+                        self.nodes[loc]["have"].append(obj_clean)
+                else:
+                    self._add_object_relation(
+                        self.current_location, subj_clean, rel_lower, obj_clean
+                    )
+            elif rel_lower in self._direction_set():
+                if loc:
+                    direction = self._canonical_direction(rel_lower)
+                    node = self.nodes[loc]
+                    if (direction not in node["direction"]
+                            and direction not in node["blocked_directions"]
+                            and direction not in node["may_direction"]):
+                        node["may_direction"].append(direction)
+            elif rel_lower in ("need", "require"):
+                if loc:
+                    if obj_clean not in self.nodes[loc].get("needs", []):
+                        self.nodes[loc].setdefault("needs", []).append(obj_clean)
+                else:
+                    self._add_object_relation(
+                        self.current_location, subj_clean, rel_lower, obj_clean
+                    )
+            elif rel_lower in ("on", "in") and subj_clean.lower() != "you":
+                self._add_object_relation(
+                    self.current_location, subj_clean, rel_lower, obj_clean
+                )
+            elif (rel_lower in self._state_relation_set()
+                  and subj_clean.lower() != "you"):
+                self._add_object_state_relation(
+                    self.current_location, subj_clean, rel_lower, obj_clean
+                )
+        for carried in self.inventory:
+            self._remove_item_from_world(carried.lower())
+
     def resolve_arrival_location(self, title: str, observation: str = "",
-                                 from_location: str = "", action: str = "",
-                                 engine_num=None, engine_name: str = "",
-                                 epoch: int = 1) -> str:
+                                 from_location: str = "",
+                                 action: str = "") -> str:
         """Return a stable room node for a movement-confirmed arrival title.
 
         Some games reuse titles such as "Forest" or "Clearing" for distinct
@@ -168,46 +222,6 @@ class KGMap:
         fingerprint differs, allocate a suffixed node (e.g. "Clearing #2").
         """
         title = self._clean_location_display(title)
-        try:
-            engine_num = int(engine_num) if engine_num is not None else None
-        except (TypeError, ValueError):
-            engine_num = None
-        if engine_num is not None:
-            existing_label = self.num_labels.get(engine_num)
-            if existing_label:
-                seen_title = title or self._clean_location_display(engine_name)
-                entry = self.room_registry[engine_num]
-                if (seen_title
-                        and not entry.get("seen_lit", False)
-                        and not self._is_generic_dark_label(seen_title)):
-                    replacement = self._stable_registry_label(
-                        seen_title,
-                        exclude_label=existing_label,
-                    )
-                    self._rename_registered_node(existing_label, replacement, engine_num)
-                    existing_label = replacement
-                    entry["label"] = replacement
-                    entry["seen_lit"] = True
-                self._ensure_node(existing_label)
-                self.node_nums[existing_label] = engine_num
-                if seen_title:
-                    titles = entry.setdefault("titles_seen", [])
-                    if seen_title not in titles:
-                        titles.append(seen_title)
-                return existing_label
-
-            base = title or self._clean_location_display(engine_name) or "Unknown room"
-            label = self._stable_registry_label(base)
-            self.room_registry[engine_num] = {
-                "label": label,
-                "titles_seen": [base] if base else [],
-                "first_seen_epoch": int(epoch or 1),
-                "seen_lit": not self._is_generic_dark_label(base),
-            }
-            self.num_labels[engine_num] = label
-            self.node_nums[label] = engine_num
-            self._ensure_node(label)
-            return label
         if not title:
             return ""
 
@@ -253,92 +267,130 @@ class KGMap:
 
         return candidates[0]
 
-    def confirm_arrival(self, location: str, engine_num=None):
-        """Set current room only from an authoritative arrival resolver."""
-        location = self._ensure_node(location)
+    def room_candidates(self, title: str) -> list[str]:
+        """Return same-base candidates, most recently visited first."""
+        base_key = self._base_location_key(canonical_room_display(title))
+        candidates = [
+            label for label in self.nodes
+            if self._base_location_key(label) == base_key
+        ]
+        return sorted(
+            candidates,
+            key=lambda label: int(self.nodes[label].get("last_visit_order", 0)),
+            reverse=True,
+        )
+
+    def candidate_cards(self, title: str, limit: int = 4) -> list[dict]:
+        cards = []
+        for label in self.room_candidates(title)[:max(1, int(limit or 4))]:
+            node = self.nodes[label]
+            cards.append({
+                "label": label,
+                "stored_arrival_description": node.get("arrival_description", ""),
+                "known_exits": dict(node.get("direction", {}) or {}),
+                "blocked_directions": list(node.get("blocked_directions", []) or []),
+                "known_arrival_ways": list(node.get("arrival_ways", []) or [])[-3:],
+                "registry_id": self.node_registry_ids.get(label, ""),
+            })
+        return cards
+
+    def known_edge_evidence(self, from_location: str, action: str, title: str) -> str:
+        destination = self._destination_for_known_edge(from_location, action, title)
+        if not destination:
+            return ""
+        return (
+            f"Your map previously recorded that {action} from {from_location} "
+            f"leads to {destination}."
+        )
+
+    def description_signature(self, title: str, observation: str) -> str:
+        """Normalize the full first paragraph of text-derived arrival evidence."""
+        text = str(observation or "").strip()
+        paragraph = re.split(r"\n\s*\n", text, maxsplit=1)[0]
+        title_clean = re.escape(canonical_room_display(title))
+        paragraph = re.sub(
+            rf"^\s*{title_clean}\b", "", paragraph, flags=re.IGNORECASE
+        )
+        paragraph = paragraph.lower()
+        paragraph = re.sub(r"[^a-z0-9\s]+", " ", paragraph)
+        paragraph = re.sub(r"\b(the|a|an)\b", " ", paragraph)
+        return re.sub(r"\s+", " ", paragraph).strip()[:1000]
+
+    def mint_room(self, title: str, observation: str = "", epoch: int = 1,
+                  force_new: bool = False) -> tuple[str, str]:
+        """Mint a room through the persistent text-derived naming registry."""
+        base = canonical_room_display(title) or "Starting Location"
+        base = re.sub(r"\s+#\d+$", "", base).strip() or "Starting Location"
+        signature = self.description_signature(base, observation)
+        matches = [
+            (rid, entry) for rid, entry in self.room_registry.items()
+            if self._base_location_key(entry.get("base", ""))
+            == self._base_location_key(base)
+            and entry.get("description_signature", "") == signature
+        ]
+        if matches and not force_new:
+            registry_id, entry = matches[0]
+        else:
+            self._registry_counter += 1
+            registry_id = f"r{self._registry_counter}"
+            same_base = [
+                entry for entry in self.room_registry.values()
+                if self._base_location_key(entry.get("base", ""))
+                == self._base_location_key(base)
+            ]
+            entry = {
+                "base": base,
+                "label": base if not same_base else f"{base} #{len(same_base) + 1}",
+                "description_signature": signature,
+                "first_seen_epoch": int(epoch or 1),
+            }
+            self.room_registry[registry_id] = entry
+        label = self._ensure_room(entry["label"])
+        self.node_registry_ids[label] = registry_id
+        if observation:
+            self.nodes[label]["arrival_description"] = str(observation).strip()[:1200]
+            self.room_fingerprints[label] = self._room_fingerprint(base, observation)
+            self.room_description_fingerprints[label] = self._full_room_fingerprint(
+                base, observation
+            )
+        return label, registry_id
+
+    def confirm_arrival(self, location: str, observation: str = "",
+                        from_location: str = "", action: str = "") -> str:
+        """Set the live cursor only after grounded text arrival resolution."""
+        location = self._lookup_room(location)
         if not location:
             return ""
+        self._visit_counter += 1
+        self._current_visit_id = self._visit_counter
         self.current_location = location
-        self.engine_grounded = engine_num is not None
-        if engine_num is not None:
-            try:
-                num = int(engine_num)
-                self.node_nums[location] = num
-                self.num_labels[num] = location
-            except (TypeError, ValueError):
-                pass
+        self.location_uncertain = False
         if location not in self.visited_rooms:
             self.visited_rooms.append(location)
+        node = self.nodes[location]
+        node["last_visit_order"] = self._visit_counter
+        if observation:
+            node["arrival_description"] = str(observation).strip()[:1200]
+        if from_location and action:
+            way = f"{action} from {from_location}"
+            if way not in node.setdefault("arrival_ways", []):
+                node["arrival_ways"].append(way)
         return location
 
-    def engine_num_for(self, location: str):
-        label = self._canonicalize_known_location(location)
-        return self.node_nums.get(label)
+    def set_location_uncertain(self, value: bool = True):
+        self.location_uncertain = bool(value)
 
-    def label_for_engine_num(self, engine_num):
-        try:
-            return self.num_labels.get(int(engine_num))
-        except (TypeError, ValueError):
-            return None
+    def registry_id_for(self, location: str) -> str:
+        label = self._lookup_room(location)
+        return self.node_registry_ids.get(label, "") if label else ""
 
-    def _stable_registry_label(self, base: str, exclude_label: str = "") -> str:
-        base = self._clean_location_display(base) or "Unknown room"
-        used = {
-            entry.get("label", "") for entry in self.room_registry.values()
-            if entry.get("label", "") != exclude_label
-        }
-        if base not in used:
-            return base
-        idx = 2
-        while f"{base} #{idx}" in used:
-            idx += 1
-        return f"{base} #{idx}"
-
-    def _is_generic_dark_label(self, label: str) -> bool:
-        return self._location_key(label) in {"dark place", "unknown room"}
-
-    def _rename_registered_node(self, old: str, new: str, engine_num: int):
-        if not old or not new or old == new:
-            return
-        if old in self.nodes and new not in self.nodes:
-            self.nodes[new] = self.nodes.pop(old)
-        if old in self.room_fingerprints:
-            self.room_fingerprints[new] = self.room_fingerprints.pop(old)
-        if old in self.room_description_fingerprints:
-            self.room_description_fingerprints[new] = (
-                self.room_description_fingerprints.pop(old)
-            )
-        if old in self._confirmed_direction_history:
-            self._confirmed_direction_history[new] = (
-                self._confirmed_direction_history.pop(old)
-            )
-        for node in self.nodes.values():
-            for direction, destination in list(node.get("direction", {}).items()):
-                if destination == old:
-                    node["direction"][direction] = new
-            for action, destination in list(node.get("confirmed_actions", {}).items()):
-                if destination == old:
-                    node["confirmed_actions"][action] = new
-        self.visited_rooms = [new if item == old else item for item in self.visited_rooms]
-        if self.current_location == old:
-            self.current_location = new
-        self.location_aliases.pop(self._location_key(old), None)
-        self.location_aliases[self._location_key(new)] = new
-        self.node_nums.pop(old, None)
-        self.node_nums[new] = engine_num
-        self.num_labels[engine_num] = new
-
-    def _engine_triple_room(self, subject: str) -> str:
-        """Resolve FM room subjects only to the current engine-confirmed room."""
-        current = self.current_location
-        if not current or current not in self.nodes:
-            return ""
-        subject_key = self._location_key(subject)
-        current_key = self._base_location_key(current)
-        placeholders = {"location", "current location", "room", "current room"}
-        if subject_key in placeholders or subject_key == current_key:
-            return current
-        return ""
+    def registry_candidates_for_base(self, title: str) -> list[tuple[str, dict]]:
+        key = self._base_location_key(title)
+        return [
+            (rid, copy.deepcopy(entry))
+            for rid, entry in self.room_registry.items()
+            if self._base_location_key(entry.get("base", "")) == key
+        ]
 
     def seed_room_fingerprint(self, location: str, observation: str) -> str:
         """Assign an observation fingerprint to an already-created room node."""
@@ -583,14 +635,16 @@ class KGMap:
         return bool(words and words[0] in {"drop", "discard"})
 
     def _resolve_location_subject(self, subject: str, new_location: str = None):
-        """Return a room node for a triple subject, or None for object subjects."""
-        if subject == "[Location]":
-            return new_location or self.current_location
+        """Resolve FM room subjects only to the current resolved sibling."""
+        current = self.current_location
+        if not current or current not in self.nodes:
+            return None
         subject_key = self._location_key(subject)
-        if new_location and subject_key == self._location_key(new_location):
-            return new_location
-        if subject_key in self.location_aliases:
-            return self.location_aliases[subject_key]
+        placeholders = {"location", "current location", "room", "current room"}
+        if subject == "[Location]" or subject_key in placeholders:
+            return current
+        if subject_key == self._base_location_key(current):
+            return current
         return None
 
     def _add_object_relation(self, loc: str, subject: str, relation: str, obj: str):
@@ -797,8 +851,8 @@ class KGMap:
             return value.strip().lower() in {"true", "yes", "1"}
         return bool(value)
 
-    def _ensure_node(self, location: str):
-        """Create a node if it doesn't exist and return its canonical display name."""
+    def _ensure_room(self, location: str):
+        """Create a room node. Call only from arrival/registry paths."""
         display = self._clean_location_display(location)
         if not display:
             return ""
@@ -817,9 +871,25 @@ class KGMap:
                 "may_direction": self._standard_directions(),  # all directions untried on discovery
                 "needs": [],          # requirements
                 "relations": [],      # object-object relations in this room
+                "arrival_description": "",
+                "arrival_ways": [],
+                "last_visit_order": 0,
             }
             self.room_fingerprints.setdefault(display, "")
         return display
+
+    def _lookup_room(self, location: str):
+        """Return a known room label without creating anything."""
+        display = self._clean_location_display(location)
+        if not display:
+            return ""
+        if display in self.nodes:
+            return display
+        return self.location_aliases.get(self._location_key(display), "")
+
+    def _ensure_node(self, location: str):
+        """Compatibility alias for the legacy fallback pipeline."""
+        return self._ensure_room(location)
 
     def _destination_for_known_edge(self, from_location: str, action: str,
                                     title: str) -> str:
@@ -959,6 +1029,9 @@ class KGMap:
             node = self.nodes[self.current_location]
             if direction_lower and direction_lower not in node.setdefault("blocked_directions", []):
                 node["blocked_directions"].append(direction_lower)
+                self._visit_blocked_writes.setdefault(
+                    (self._current_visit_id, self.current_location), set()
+                ).add(direction_lower)
             may = node["may_direction"]
             if direction_lower in may:
                 may.remove(direction_lower)
@@ -980,6 +1053,9 @@ class KGMap:
             node = self.nodes[location]
             if direction_lower and direction_lower not in node.setdefault("blocked_directions", []):
                 node["blocked_directions"].append(direction_lower)
+                self._visit_blocked_writes.setdefault(
+                    (self._current_visit_id, location), set()
+                ).add(direction_lower)
             may = node["may_direction"]
             if direction_lower in may:
                 may.remove(direction_lower)
@@ -987,7 +1063,11 @@ class KGMap:
                 self._remember_confirmed_direction(location, direction_lower)
                 del node["direction"][direction_lower]
 
-    def confirm_direction(self, from_location: str, direction: str, to_location: str):
+    def confirm_direction(self, from_location: str, direction: str, to_location: str,
+                          epoch: int = 0, step: int = 0,
+                          source_visit_id: int = None,
+                          allow_split: bool = False,
+                          preserve_conflict: bool = False) -> dict:
         """Record a confirmed valid exit in the source room.
 
         Called as a backup when the relation extractor fails to produce the
@@ -996,8 +1076,41 @@ class KGMap:
         direction_lower = self._canonical_direction(direction)
         from_location = self._canonicalize_known_location(from_location)
         to_location = self._canonicalize_known_location(to_location)
+        split_event = {}
         if from_location and from_location in self.nodes:
             node = self.nodes[from_location]
+            prior_destination = (node.get("direction", {}) or {}).get(
+                direction_lower, ""
+            )
+            edge_conflict = bool(
+                prior_destination and to_location and prior_destination != to_location
+            )
+            blocked_conflict = direction_lower in node.get("blocked_directions", [])
+            if allow_split and (edge_conflict or blocked_conflict):
+                split_event = self._split_contradictory_source_room(
+                    from_location=from_location,
+                    direction=direction_lower,
+                    to_location=to_location,
+                    trigger=("edge_contradiction" if edge_conflict
+                             else "blocked_success_contradiction"),
+                    epoch=epoch,
+                    step=step,
+                    source_visit_id=(
+                        self._current_visit_id
+                        if source_visit_id is None else source_visit_id
+                    ),
+                )
+                return split_event
+            if preserve_conflict and (edge_conflict or blocked_conflict):
+                return {
+                    "epoch": int(epoch or 0),
+                    "step": int(step or 0),
+                    "from_room": from_location,
+                    "direction": direction_lower,
+                    "destination": to_location,
+                    "trigger": "split_cap_reached",
+                    "suppressed": True,
+                }
             self._remember_confirmed_direction(from_location, direction_lower)
             if to_location and not self._is_placeholder_destination(to_location, direction_lower):
                 node["direction"][direction_lower] = to_location
@@ -1006,6 +1119,46 @@ class KGMap:
                 may.remove(direction_lower)
             if direction_lower in node.setdefault("blocked_directions", []):
                 node["blocked_directions"].remove(direction_lower)
+        return split_event
+
+    def _split_contradictory_source_room(self, from_location: str,
+                                         direction: str, to_location: str,
+                                         trigger: str, epoch: int, step: int,
+                                         source_visit_id: int) -> dict:
+        """Repair one merged source belief while preserving its older facts."""
+        original = self.nodes[from_location]
+        description = original.get("arrival_description", "")
+        sibling, registry_id = self.mint_room(
+            re.sub(r"\s+#\d+$", "", from_location),
+            observation=description,
+            epoch=epoch or 1,
+            force_new=True,
+        )
+        sibling_node = self.nodes[sibling]
+        sibling_node["arrival_description"] = description
+        sibling_node["direction"][direction] = to_location
+        if direction in sibling_node.get("may_direction", []):
+            sibling_node["may_direction"].remove(direction)
+        if direction in sibling_node.get("blocked_directions", []):
+            sibling_node["blocked_directions"].remove(direction)
+        visit_key = (int(source_visit_id or 0), from_location)
+        moved_blocked = []
+        if direction in self._visit_blocked_writes.get(visit_key, set()):
+            if direction in original.get("blocked_directions", []):
+                original["blocked_directions"].remove(direction)
+            moved_blocked.append(direction)
+        self._remember_confirmed_direction(sibling, direction)
+        return {
+            "epoch": int(epoch or 0),
+            "step": int(step or 0),
+            "from_room": from_location,
+            "new_sibling": sibling,
+            "registry_id": registry_id,
+            "direction": direction,
+            "destination": to_location,
+            "trigger": trigger,
+            "moved_current_visit_blocked": moved_blocked,
+        }
 
     def is_direction_blocked(self, location: str, direction: str) -> bool:
         """True when the game has already rejected this exit from location."""
@@ -1126,6 +1279,11 @@ class KGMap:
 
         return {
             "current_location": self.current_location,
+            "location_uncertain": self.location_uncertain,
+            "location_note": (
+                "You moved but cannot see where you are. Do not assume room facts."
+                if self.location_uncertain else ""
+            ),
             "current_room_state": current_room_state,
             "navigation_graph": {
                 loc: dict(data.get("direction", {}) or {})
@@ -1195,7 +1353,8 @@ class KGMap:
             "inventory": list(self.inventory),
             "room_fingerprints": dict(self.room_fingerprints),
             "room_registry": copy.deepcopy(self.room_registry),
-            "node_nums": dict(self.node_nums),
+            "node_registry_ids": dict(self.node_registry_ids),
+            "location_uncertain": self.location_uncertain,
         }
 
     def num_rooms(self) -> int:

@@ -2,10 +2,6 @@
 
 import os
 
-# Prefer Jericho's stable object-table room identity when the frontend exposes it.
-# Prompt-visible world state remains text-only; this is harness bookkeeping.
-ENGINE_LOCATION_GROUNDING = True
-
 # Game settings
 NUM_EPOCHS = 2
 MAX_STEPS_PER_EPOCH = 250
@@ -30,6 +26,24 @@ FM_TEMPERATURE = float(os.getenv("LPLH_FM_TEMPERATURE", "0.1"))
 PERSIST_ACTION_SPACE = os.getenv("LPLH_PERSIST_ACTION_SPACE", "false").lower() in (
     "1", "true", "yes", "on"
 )
+
+# Text-centered KG identity. Every flag falls back independently to the prior
+# pipeline when disabled or when its model output cannot be grounded.
+AUX_GATE_LOCATION_VERDICT = os.getenv(
+    "LPLH_AUX_GATE_LOCATION_VERDICT", "true"
+).lower() in ("1", "true", "yes", "on")
+LLM_LOCATION_RESOLVER = os.getenv(
+    "LPLH_LLM_LOCATION_RESOLVER", "true"
+).lower() in ("1", "true", "yes", "on")
+LOOK_PROBE_ENABLED = os.getenv(
+    "LPLH_LOOK_PROBE_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
+CONTRADICTION_SPLITTER = os.getenv(
+    "LPLH_CONTRADICTION_SPLITTER", "true"
+).lower() in ("1", "true", "yes", "on")
+EVAL_ENGINE_LOGGING = os.getenv(
+    "LPLH_EVAL_ENGINE_LOGGING", "true"
+).lower() in ("1", "true", "yes", "on")
 
 # LLM_es settings: summaries and LPLH2 auxiliary reasoning modules.
 # Set a model name such as "o3-mini" or "gpt-4.1" to use OpenAI for aux calls. Set ""

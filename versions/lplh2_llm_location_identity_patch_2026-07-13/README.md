@@ -1,13 +1,19 @@
-# LPLH2 Room-Level Goal-Situation Patch
+# LPLH2 LLM-Centered Location Identity Patch
 
 Experimental LPLH2 framework for text-based interactive fiction agents.
 
-This snapshot is `lplh2_engine_location_patch_2026-07-12`. It is an
-experimental child of `lplh2_goal_situation_roomlevel_patch_2026-07-12`; the repository's
-current main version remains unchanged.
+This snapshot is `lplh2_llm_location_identity_patch_2026-07-13`. It is an
+experimental child of `lplh2_goal_situation_roomlevel_patch_2026-07-12`; the
+repository's current main version remains unchanged.
 
 New or corrected in this version:
 
+- room movement/title verdicts come from grounded auxiliary-LLM output;
+- a second LLM decision disambiguates same-title arrivals from textual evidence;
+- FM triples cannot move the strict agent KG or create free-text destinations;
+- text-derived registry ids stabilize room/event identity across epochs;
+- contradictory traversal evidence can split a previously merged room node;
+- engine room ids are logged only for offline map evaluation;
 - every death updates a persistent physical-room death count, so two deaths in
   one room can trigger a goal even when their final commands differ;
 - compact per-room evidence preserves distinct fatal actions and gateways until

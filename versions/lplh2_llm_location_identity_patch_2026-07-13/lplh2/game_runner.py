@@ -27,8 +27,26 @@ def _trunc(text: str, length: int = 200) -> str:
     return t[:length] + "..." if len(t) > length else t
 
 
+def _look_probe(env, done: bool = False) -> str:
+    """Issue ``look`` and restore Jericho state so no game turn is consumed."""
+    if done:
+        return ""
+    state = None
+    try:
+        state = env.get_state()
+        observation, _, _, _ = env.step("look")
+        return str(observation or "")
+    except Exception:
+        return ""
+    finally:
+        if state is not None:
+            try:
+                env.set_state(state)
+            except Exception:
+                logger.warning("Could not restore Jericho state after look probe")
+
+
 def _object_num(obj):
-    """Return a Jericho object number without assuming a concrete object class."""
     try:
         value = getattr(obj, "num", None)
         return int(value) if value is not None else None
@@ -56,29 +74,22 @@ def _world_object_by_num(env, object_num):
     return None
 
 
-def _engine_location_info(env) -> dict:
-    """Read stable room identity from Jericho's object table."""
-    result = {
-        "engine_location_num": None,
-        "engine_location_name": None,
-        "engine_enclosure_name": None,
-    }
+def _evaluation_room_info(env) -> dict:
+    """Read engine identity for offline scoring only; never pass to the agent."""
+    result = {"eval_room_num": None, "eval_room_name": None}
     try:
-        immediate = env.get_player_location()
+        room = env.get_player_location()
     except Exception:
         return result
-    if immediate is None:
+    if room is None:
         return result
-
-    immediate_name = str(getattr(immediate, "name", "") or "").strip() or None
-    room = immediate
     seen = set()
     while room is not None:
-        room_num = _object_num(room)
-        if room_num is not None:
-            if room_num in seen:
+        number = _object_num(room)
+        if number is not None:
+            if number in seen:
                 break
-            seen.add(room_num)
+            seen.add(number)
         try:
             parent_num = int(getattr(room, "parent", 0) or 0)
         except (TypeError, ValueError):
@@ -89,40 +100,9 @@ def _engine_location_info(env) -> dict:
         if parent is None:
             break
         room = parent
-
-    result["engine_location_num"] = _object_num(room)
-    result["engine_location_name"] = (
-        str(getattr(room, "name", "") or "").strip() or None
-    )
-    if room is not immediate:
-        result["engine_enclosure_name"] = immediate_name
+    result["eval_room_num"] = _object_num(room)
+    result["eval_room_name"] = str(getattr(room, "name", "") or "").strip() or None
     return result
-
-
-def _look_probe(env, done: bool = False) -> str:
-    """Ask the game for its room display without consuming game state."""
-    if done:
-        return ""
-    state = None
-    try:
-        state = env.get_state()
-        observation, _, _, _ = env.step("look")
-        return str(observation or "")
-    except Exception:
-        return ""
-    finally:
-        if state is not None:
-            try:
-                env.set_state(state)
-            except Exception:
-                logger.warning("Could not restore Jericho state after look probe")
-
-
-def _enrich_engine_info(env, info: dict, done: bool = False) -> dict:
-    enriched = dict(info or {})
-    enriched.update(_engine_location_info(env))
-    enriched["look_probe_text"] = _look_probe(env, done=done)
-    return enriched
 
 
 class GameRunner:
@@ -582,8 +562,15 @@ class GameRunner:
         except Exception:
             pass
 
-        if config.ENGINE_LOCATION_GROUNDING:
-            info = _enrich_engine_info(env, info, done=False)
+        info = dict(info or {})
+        if config.LOOK_PROBE_ENABLED:
+            info["look_probe_text"] = _look_probe(env, done=False)
+        initial_eval = (
+            _evaluation_room_info(env) if config.EVAL_ENGINE_LOGGING
+            else {"eval_room_num": None, "eval_room_name": None}
+        )
+        if self._current_epoch_log is not None:
+            self._current_epoch_log["initial_evaluation_room"] = initial_eval
 
         score = info.get("score", 0)
         max_score = score
@@ -606,8 +593,13 @@ class GameRunner:
             try:
                 # print(f"DEBUG: Executing step {step} with action '{action}'...", flush=True)
                 observation, reward, done, info = env.step(action)
-                if config.ENGINE_LOCATION_GROUNDING:
-                    info = _enrich_engine_info(env, info, done=done)
+                info = dict(info or {})
+                if config.LOOK_PROBE_ENABLED:
+                    info["look_probe_text"] = _look_probe(env, done=done)
+                eval_room = (
+                    _evaluation_room_info(env) if config.EVAL_ENGINE_LOGGING
+                    else {"eval_room_num": None, "eval_room_name": None}
+                )
                 # print(f"DEBUG: Step returned done={done}", flush=True)
             except KeyboardInterrupt:
                 raise
@@ -633,6 +625,8 @@ class GameRunner:
                 info,
                 generate_next=(not done and step < self.max_steps),
             )
+            if agent.step_details:
+                agent.step_details[-1].update(eval_room)
 
             # ── Live console output ───────────────────────────
             if self.verbose:

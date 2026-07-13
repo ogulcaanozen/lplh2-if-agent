@@ -24,6 +24,7 @@ from .prompts import (
     ENVIRONMENTAL_CHANGE_PROMPT,
     ENVIRONMENTAL_CHANGE_DETECTION_PROMPT,
     AUXILIARY_MODULE_GATE_PROMPT,
+    LOCATION_RESOLVER_PROMPT,
     INVENTORY_RECONCILIATION_PROMPT,
     WORLD_STATE_EXTRACTION_PROMPT,
     ERROR_CORRECTION_PROMPT,
@@ -132,6 +133,9 @@ class LLMClient:
         self.last_auxiliary_gate_prompt = None
         self.last_auxiliary_gate_raw_response = None
         self.last_auxiliary_gate_finish_reason = None
+        self.last_location_resolver_prompt = None
+        self.last_location_resolver_raw_response = None
+        self.last_location_resolver_finish_reason = None
         self.last_inventory_reconciliation_prompt = None
         self.last_inventory_reconciliation_raw_response = None
         self.last_inventory_reconciliation_finish_reason = None
@@ -548,7 +552,8 @@ class LLMClient:
                                recent_command_outcomes: list,
                                same_state_tried_commands: list,
                                action_transition_candidate: dict,
-                               cached_affordance_ideas_available: int) -> str:
+                               cached_affordance_ideas_available: int,
+                               look_probe_text: str = "") -> str:
         """Route selected auxiliary modules for the latest completed step."""
         prompt = AUXILIARY_MODULE_GATE_PROMPT.format(
             location=location or "unknown",
@@ -556,6 +561,7 @@ class LLMClient:
             action=action or "none",
             action_valid=str(action_valid),
             observation=observation or "",
+            look_probe_text=look_probe_text or "",
             done=str(bool(done)),
             score=score,
             reward_change=reward_change,
@@ -594,6 +600,39 @@ class LLMClient:
             self.last_auxiliary_gate_finish_reason = "llm_a_qwen14b"
 
         self.last_auxiliary_gate_raw_response = response
+        m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
+        return m.group(1).strip() if m else response.strip()
+
+    def resolve_location_identity(self, title: str, description: str,
+                                  action: str, from_location: str,
+                                  candidate_cards: list,
+                                  map_evidence: str = "") -> str:
+        """Ask the auxiliary LLM to disambiguate a same-title arrival."""
+        prompt = LOCATION_RESOLVER_PROMPT.format(
+            title=title or "unknown",
+            description=description or "",
+            action=action or "none",
+            from_location=from_location or "unknown",
+            candidate_cards=json.dumps(candidate_cards or [], ensure_ascii=False),
+            map_evidence=map_evidence or "none",
+        )
+        self.last_location_resolver_prompt = prompt
+        self.last_location_resolver_raw_response = None
+        self.last_location_resolver_finish_reason = None
+        if self._es_client and config.LLM_ES_MODEL:
+            response, finish_reason = self._chat_es_json(
+                prompt,
+                max_completion_tokens=384,
+                retry_instruction=(
+                    "Return only the required |start|...|end| JSON object."
+                ),
+                retry_tokens=384,
+            )
+            self.last_location_resolver_finish_reason = finish_reason
+        else:
+            response = self._chat_aux_fallback(prompt, max_new_tokens=384)
+            self.last_location_resolver_finish_reason = "llm_a_qwen14b"
+        self.last_location_resolver_raw_response = response
         m = re.search(r"\|start\|\s*(.*?)\s*\|end\|", response, re.DOTALL)
         return m.group(1).strip() if m else response.strip()
 

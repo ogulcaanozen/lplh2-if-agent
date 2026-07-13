@@ -150,6 +150,8 @@ LOSS_EXPERIENCE_SUMMARIZATION_PROMPT = """<START OF INSTRUCTIONS>
 You are summarizing a score LOSS, usually a death, in a text-based game so a future playthrough can avoid repeating the same mistake. Use only the provided history and attempt ledger. Quote before you conclude.
 
 Work in this order:
+0. DEATH ROOM TITLE: copy the room title printed in the terminal observation
+   verbatim, including decoration, or use an empty string if no title is visible.
 1. FINAL EXCHANGES: copy exactly the last 3 action/observation pairs verbatim, ending with the fatal one. If fewer than 3 pairs are available, copy all available pairs.
 2. PROXIMATE CAUSE: one sentence naming what state or condition directly led to the loss, supported only by the quoted text.
 3. CONFIRMED MECHANICS: list game rules or hazards the observations stated outright. Each confirmed mechanic must be traceable to a specific quoted observation or the attempt ledger; if it requires inference about causes, move it to untested_idea. If the attempt ledger says the fatal command produced different outcomes across attempts, include that outcomes vary between attempts. Do not invent weaknesses, tools, routes, or solutions that were never observed.
@@ -166,6 +168,7 @@ Return between |start| and |end|:
 {{
   "location": "...",
   "death_location": "...",
+  "death_room_title": "verbatim printed title or empty",
   "fatal_action": "...",
   "final_exchanges": [
     {{"action": "...", "observation": "..."}}
@@ -538,6 +541,13 @@ Make exactly these decisions:
    reports completion, or announces a final/maximum score even if violent words
    appear.
 
+0b. Location verdict
+   Decide whether the latest action moved the player. Copy room_title VERBATIM
+   from Observation After Action or Look Probe, including decoration characters.
+   Use moved="no" for a rejection or an examine/look-at/look-through result where
+   the player stayed. Use moved="yes" with an empty title when movement is clear
+   but the destination cannot be seen. When movement is ambiguous, use "unclear".
+
 1. Summary trigger decisions
    These decide whether the summary module should try to create a concrete,
    reusable memory for this step. Set "run": true only when the observation
@@ -641,6 +651,7 @@ Return compact JSON only between |start| and |end|. No prose.
 Schema:
 - "outcome": one of "accepted", "rejected", "no_effect", "unknown".
 - "terminal": one of "none", "defeat", "victory", "other".
+- "location": {{"moved":"yes|no|unclear","room_title":"verbatim or empty"}}.
 - "summary": list containing any of "navigation", "environmental", "narrative".
 - "inventory": boolean.
 - "world_state": boolean.
@@ -655,6 +666,7 @@ Example:
 {{
   "outcome": "accepted",
   "terminal": "none",
+  "location": {{"moved": "yes", "room_title": "Kitchen"}},
   "summary": ["navigation"],
   "inventory": false,
   "world_state": false,
@@ -674,6 +686,7 @@ Previous Location: {previous_location}
 Previous Action: {action}
 Action Validity From FM: {action_valid}
 Observation After Action: {observation}
+State-Preserving Look Probe: {look_probe_text}
 Game ended this step: {done}
 Current Score: {score}
 Reward Change: {reward_change}
@@ -689,6 +702,38 @@ Recent Command Outcomes Here: {recent_command_outcomes}
 Same-State Tried Commands: {same_state_tried_commands}
 Action Transition Candidate: {action_transition_candidate}
 Cached Affordance Ideas Available For This State: {cached_affordance_ideas_available}"""
+
+
+# ---------------------------------------------------------------------
+# LPLH2 Enhancement: Text-grounded same-title room identity resolver
+# ---------------------------------------------------------------------
+LOCATION_RESOLVER_PROMPT = """<START OF INSTRUCTIONS>
+You resolve the identity of a room in a text-based interactive fiction map.
+The arrival title is grounded game text. Decide whether this arrival matches one
+offered room candidate or is a distinct room with the same title.
+
+Compare the full arrival description, source room, command, known exits, blocked
+directions, and previous arrival ways. A prior map edge is evidence, not an
+override. Prefer a new room when evidence is insufficient: a false merge poisons
+the map, while an extra split is recoverable.
+
+Return JSON only between |start| and |end|:
+|start|
+{{
+  "decision": "existing | new",
+  "match_label": "one offered label or empty",
+  "confidence": "high | medium | low",
+  "reason": "one short sentence"
+}}
+|end|
+<END OF INSTRUCTIONS>
+
+Arrival room title: {title}
+Full arrival description: {description}
+Command taken: {action}
+Source room: {from_location}
+Candidate rooms: {candidate_cards}
+Known-map evidence: {map_evidence}"""
 
 
 # ---------------------------------------------------------------------

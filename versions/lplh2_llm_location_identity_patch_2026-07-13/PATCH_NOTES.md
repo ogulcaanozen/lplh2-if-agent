@@ -1,19 +1,18 @@
-# LPLH2 Engine-Grounded Location Patch
+# LPLH2 LLM-Centered Location Identity Patch
 
-## 2026-07-12: stable Jericho room identity
+## 2026-07-13: text-grounded KG room identity
 
 Created from `versions/lplh2_goal_situation_roomlevel_patch_2026-07-12`.
+The main marker remains unchanged. The auxiliary gate now emits a grounded
+movement/title verdict, same-title arrivals are resolved by the auxiliary LLM,
+and a persistent text-derived registry stabilizes room labels across epochs.
+FM location triples are inert in the strict agent KG, confirmed edges come only
+from resolved movement, and contradictory edges can split a merged room belief.
 
-- Jericho object numbers now ground room identity when available.
-- A state-preserving `look` probe supplies canonical prompt-visible labels.
-- The room-number registry persists across epoch resets without preserving map state.
-- FM triples cannot move the player, mint rooms, or confirm graph edges in engine mode.
-- Engine-confirmed cardinal and non-cardinal transitions are the only confirmed edges.
-- Score/death memories, retrieval matching, and goal situations carry internal room nums.
-- Terminal destinations are logged without moving the live KG cursor or blocking lethal exits.
-- Text/fingerprint location resolution remains the complete fallback path.
-
-The sections below describe inherited room-level goal behavior.
+The runner performs state-preserving `look` probes and records Jericho room ids
+only in the steplog for offline evaluation. They are never put in agent `info`,
+prompts, memories, event keys, or the registry. Terminal room titles are copied
+by the death summarizer and substring-validated before hazard memories use them.
 
 ## 2026-07-12: room-level lifecycle and merged warnings
 

@@ -34,10 +34,6 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
-class _EngineLocationResolved(Exception):
-    """Internal control flow: the engine-authoritative KG branch completed."""
-
-
 class LPLHAgent:
     """LPLH Agent for playing Interactive Fiction games.
 
@@ -54,7 +50,7 @@ class LPLHAgent:
         self.llm = llm_client or LLMClient()
         # fm (3 paper-faithful structured tasks: validate / extract / split)
         self.fm = fm_client or FmClient()
-        self.kg_map = KGMap()
+        self.kg_map = KGMap(strict_location_authority=True)
         self.action_space = ActionSpace()
         self.experience_lib = ExperienceLib()
         self.situation_memory = SituationMemory()
@@ -87,7 +83,8 @@ class LPLHAgent:
         self._goal_visit_inventory = {}
         self._hazard_room_deaths = {}
         self._hazard_room_evidence = {}
-        self._current_engine_location_num = None
+        self._location_resolver_cache = {}
+        self._contradiction_splits_this_epoch = set()
 
     def reset(self, keep_experiences: bool = True):
         """Reset the agent for a new epoch.
@@ -123,7 +120,8 @@ class LPLHAgent:
         self._recent_outcomes = []
         self._visit_direction_failures = {}
         self._goal_visit_inventory = {}
-        self._current_engine_location_num = None
+        self._location_resolver_cache = {}
+        self._contradiction_splits_this_epoch = set()
         if not keep_experiences:
             self._hazard_room_deaths = {}
             self._hazard_room_evidence = {}
@@ -228,139 +226,59 @@ class LPLHAgent:
         pure_rejection = self._is_pure_rejected_observation(action_valid, observation)
         detail["pure_rejection_skip"] = pure_rejection
 
+        timer = time.perf_counter()
+        auxiliary_gate = self._run_auxiliary_gate(
+            action=completed_action,
+            observation=observation,
+            done=done,
+            score=score,
+            reward_change=reward_change,
+            action_valid=action_valid,
+            prev_location=prev_location,
+            inventory_before=inventory_before,
+            visited_rooms_before=visited_rooms_before,
+            look_probe_text=info.get("look_probe_text", ""),
+        )
+        record_timing("auxiliary_gate", timer)
+        detail["modules"]["auxiliary_gate"] = auxiliary_gate
+
+        source_visit_id = getattr(self.kg_map, "_current_visit_id", 0)
+        kg_location_resolution = self._resolve_step_location(
+            auxiliary_gate=auxiliary_gate,
+            action=completed_action,
+            observation=observation,
+            look_probe_text=info.get("look_probe_text", ""),
+            previous_location=prev_location,
+            done=done,
+        )
+
         extracted_triples = []
         applied_triples = []
-        engine_num = self._coerce_engine_num(info.get("engine_location_num"))
-        engine_name = self._clean_text(info.get("engine_location_name", ""))
-        engine_enclosure = self._clean_text(info.get("engine_enclosure_name", ""))
-        probe_title = self._extract_probe_room_title(info.get("look_probe_text", ""))
-        engine_mode = bool(config.ENGINE_LOCATION_GROUNDING and engine_num is not None)
-        previous_engine_num = self._current_engine_location_num
-        engine_moved = bool(
-            engine_mode
-            and previous_engine_num is not None
-            and engine_num != previous_engine_num
-        )
-        if engine_moved and action_valid is not True:
-            raw_action_valid = action_valid
-            action_valid = True
-            pure_rejection = False
-            detail["pure_rejection_skip"] = False
-            action_space_detail = detail["modules"].get("action_space", {})
-            action_space_detail["fm_prev_action_valid"] = raw_action_valid
-            action_space_detail["prev_action_valid"] = True
-            action_space_detail["validity_override"] = {
-                "source": "engine_location_change",
-                "status": "accepted",
-                "reason": "Jericho player location object changed",
-            }
-            if action_split is None:
-                try:
-                    action_split = self.fm.split_action(completed_action)
-                    self.action_space.store_action(
-                        action_split["verb"], action_split["objects"]
-                    )
-                    action_space_detail["action_split"] = action_split
-                    action_space_detail["total_verbs"] = len(self.action_space.verbs)
-                    action_space_detail["total_actions_learned"] = self.action_space.num_actions()
-                    action_space_detail["all_verbs"] = list(self.action_space.verbs.keys())
-                except Exception as exc:
-                    action_space_detail["validity_override_split_error"] = str(exc)
-        terminal_engine_destination_label = ""
-        terminal_engine_destination_num = None
-        kg_location_resolution = {
-            "raw_room_title": "",
-            "fm_location": "",
-            "title_fallback_used": False,
-            "title_overrode_fm": False,
-            "chosen_location_hint": "",
-            "previous_location": prev_location,
-            "location_after_update": "",
-            "confirmed_transition_type": "",
-            "confirmed_transition": {},
-            "action_transition_candidate": {},
-            "action_transition_gate_decision": {},
-            "action_transition_applied": False,
-            "action_transition_status": "",
-            "engine_location_num": engine_num,
-            "engine_location_name": engine_name,
-            "engine_enclosure_name": engine_enclosure,
-            "probe_title": probe_title,
-            "registry_label": "",
-            "resolution_mode": "engine" if engine_mode else "text_fallback",
-        }
-
-        if engine_mode:
-            display_title = probe_title
-            if not display_title and self._observation_is_dark(observation):
-                display_title = self.kg_map.label_for_engine_num(engine_num) or "Dark place"
-            registry_label = self.kg_map.resolve_arrival_location(
-                display_title,
-                observation=info.get("look_probe_text", "") or observation,
-                from_location=prev_location or "",
-                action=completed_action,
-                engine_num=engine_num,
-                engine_name=engine_name,
-                epoch=self.current_epoch,
-            )
-            kg_location_resolution["registry_label"] = registry_label
-            # Terminal destinations are recorded for hazard memory, but death does
-            # not move the live KG cursor away from the issuing room.
-            if done:
-                terminal_engine_destination_label = registry_label
-                terminal_engine_destination_num = engine_num
-            else:
-                self.kg_map.confirm_arrival(registry_label, engine_num=engine_num)
-                self._current_engine_location_num = engine_num
-                if engine_moved and prev_location and registry_label:
-                    direction = self._canonical_navigation_direction(completed_action)
-                    if direction:
-                        self.kg_map.confirm_direction(prev_location, direction, registry_label)
-                        transition_type = "direction"
-                    else:
-                        self.kg_map.confirm_action_transition(
-                            prev_location, completed_action, registry_label
-                        )
-                        transition_type = "action"
-                    kg_location_resolution["confirmed_transition_type"] = transition_type
-                    kg_location_resolution["confirmed_transition"] = {
-                        "from": prev_location,
-                        "command": completed_action,
-                        "to": registry_label,
-                    }
-                    kg_location_resolution["action_transition_status"] = "engine_confirmed"
-
         timer = time.perf_counter()
-        if pure_rejection:
+        if pure_rejection or self.kg_map.location_uncertain:
             kg_location_resolution["location_after_update"] = self.kg_map.current_location
-            kg_location_resolution["action_transition_status"] = "skipped_pure_rejection"
-            logger.debug("KG relation extraction skipped for pure parser/world rejection")
+            kg_location_resolution["action_transition_status"] = (
+                "skipped_location_uncertain"
+                if self.kg_map.location_uncertain else "skipped_pure_rejection"
+            )
+            logger.debug("KG relation extraction skipped for rejection/uncertain room")
         else:
             try:
                 extracted_triples = self.fm.extract_relations(completed_action, observation)
-                room_title = probe_title or self._extract_observation_room_title(observation)
+                room_title = (
+                    "" if (
+                        config.AUX_GATE_LOCATION_VERDICT
+                        and not kg_location_resolution.get(
+                            "use_legacy_location_pipeline"
+                        )
+                    )
+                    else self._extract_observation_room_title(observation)
+                )
                 fm_location = self._location_from_triples(extracted_triples)
                 kg_location_resolution["raw_room_title"] = room_title
                 kg_location_resolution["fm_location"] = fm_location
                 applied_triples = extracted_triples
                 prev_lower = completed_action.lower().strip()
-                if engine_mode:
-                    applied_triples = self._with_authoritative_location_triple(
-                        applied_triples,
-                        self.kg_map.current_location or registry_label,
-                    )
-                    self.kg_map.update(
-                        applied_triples,
-                        completed_action,
-                        engine_grounded=True,
-                    )
-                    kg_location_resolution["chosen_location_hint"] = registry_label
-                    kg_location_resolution["location_after_update"] = self.kg_map.current_location
-                    logger.debug(
-                        "Engine-grounded KG update applied with %d triples",
-                        len(applied_triples),
-                    )
-                    raise _EngineLocationResolved
                 movement_location_candidate = self._is_location_change_action(
                     completed_action,
                     action_valid,
@@ -407,29 +325,61 @@ class LPLHAgent:
                     if self.kg_map.current_location and fm_key != current_key:
                         applied_triples = self._without_location_triples(applied_triples)
                         kg_location_resolution["remote_fm_location_ignored"] = fm_location
-                self.kg_map.update(applied_triples, completed_action)
+                if (kg_location_resolution.get("use_legacy_location_pipeline")
+                        or not config.AUX_GATE_LOCATION_VERDICT):
+                    self.kg_map._legacy_update(applied_triples, completed_action)
+                else:
+                    self.kg_map.update(applied_triples, completed_action)
                 kg_location_resolution["location_after_update"] = self.kg_map.current_location
-                if (action_valid is True
+                gate_accepted = (
+                    auxiliary_gate.get("decision", {})
+                    .get("command_outcome", {})
+                    .get("status") == "accepted"
+                )
+                movement_direction = self._blocked_direction_for_command(
+                    completed_action
+                )
+                if ((action_valid is True or gate_accepted)
                         and prev_location
                         and self.kg_map.current_location
                         and self.kg_map.current_location != prev_location
-                        and prev_lower in self.kg_map._direction_set()):
-                    self.kg_map.confirm_direction(
-                        from_location=prev_location,
-                        direction=prev_lower,
-                        to_location=self.kg_map.current_location,
+                        and not done
+                        and movement_direction):
+                    split_key = (
+                        prev_location,
+                        movement_direction,
                     )
+                    room_split = self.kg_map.confirm_direction(
+                        from_location=prev_location,
+                        direction=movement_direction,
+                        to_location=self.kg_map.current_location,
+                        epoch=self.current_epoch,
+                        step=self.step_count,
+                        source_visit_id=source_visit_id,
+                        allow_split=(
+                            config.CONTRADICTION_SPLITTER
+                            and split_key not in self._contradiction_splits_this_epoch
+                        ),
+                        preserve_conflict=(
+                            config.CONTRADICTION_SPLITTER
+                            and split_key in self._contradiction_splits_this_epoch
+                        ),
+                    )
+                    if room_split:
+                        self._contradiction_splits_this_epoch.add(split_key)
+                        kg_location_resolution["room_split"] = room_split
                     kg_location_resolution["confirmed_transition_type"] = "direction"
                     kg_location_resolution["confirmed_transition"] = {
                         "from": prev_location,
-                        "command": prev_lower,
+                        "command": movement_direction,
                         "to": self.kg_map.current_location,
                     }
-                elif (action_valid is True
+                elif ((action_valid is True or gate_accepted)
                         and prev_location
                         and self.kg_map.current_location
                         and self.kg_map.current_location != prev_location
-                        and prev_lower not in self.kg_map._direction_set()):
+                        and not done
+                        and not movement_direction):
                     kg_location_resolution["confirmed_transition_type"] = "action_candidate"
                     kg_location_resolution["action_transition_candidate"] = {
                         "from": prev_location,
@@ -437,8 +387,6 @@ class LPLHAgent:
                         "to": self.kg_map.current_location,
                     }
                 logger.debug(f"KG-map updated with {len(applied_triples)} triples")
-            except _EngineLocationResolved:
-                pass
             except Exception as e:
                 logger.warning(f"Relation extraction failed: {e}")
                 extracted_triples = [("ERROR", str(e), "")]
@@ -457,20 +405,6 @@ class LPLHAgent:
             "kg_map_context": self.kg_map.to_prompt_string(),
         }
 
-        timer = time.perf_counter()
-        auxiliary_gate = self._run_auxiliary_gate(
-            action=completed_action,
-            observation=observation,
-            done=done,
-            score=score,
-            reward_change=reward_change,
-            action_valid=action_valid,
-            prev_location=prev_location,
-            inventory_before=inventory_before,
-            visited_rooms_before=visited_rooms_before,
-        )
-        record_timing("auxiliary_gate", timer)
-        detail["modules"]["auxiliary_gate"] = auxiliary_gate
         command_outcome = auxiliary_gate.get("decision", {}).get("command_outcome", {})
         terminal_status = (
             auxiliary_gate.get("decision", {}).get("terminal_outcome", "none")
@@ -481,49 +415,6 @@ class LPLHAgent:
             terminal_status=terminal_status,
             observation=observation,
         )
-        if is_death and action_valid is False:
-            action_valid = True
-            pure_rejection = False
-            detail["pure_rejection_skip"] = False
-            action_space_detail = detail["modules"].get("action_space", {})
-            action_space_detail["fm_prev_action_valid"] = False
-            action_space_detail["prev_action_valid"] = True
-            action_space_detail["validity_override"] = {
-                "source": "terminal_defeat",
-                "status": "accepted",
-                "reason": "fatal commands are consequential, not blocked exits",
-            }
-        hazard_destination_label = ""
-        hazard_destination_num = None
-        if is_death:
-            death_title = self._extract_observation_room_title(
-                observation,
-                scan_all_lines=True,
-            )
-            if (terminal_engine_destination_num is not None
-                    and previous_engine_num is not None
-                    and terminal_engine_destination_num != previous_engine_num):
-                engine_title_matches = (
-                    not death_title
-                    or self.kg_map._base_location_key(terminal_engine_destination_label)
-                    == self.kg_map._location_key(death_title)
-                    or self.kg_map._location_key(engine_name)
-                    == self.kg_map._location_key(death_title)
-                )
-                if engine_title_matches:
-                    hazard_destination_label = terminal_engine_destination_label
-                    hazard_destination_num = terminal_engine_destination_num
-            if not hazard_destination_label:
-                if death_title:
-                    hazard_destination_label = self.kg_map.resolve_arrival_location(
-                        death_title,
-                        observation=observation,
-                    )
-            if not hazard_destination_label:
-                hazard_destination_label = prev_location or self.kg_map.current_location or "Starting Location"
-                hazard_destination_num = previous_engine_num
-            kg_location_resolution["hazard_destination_label"] = hazard_destination_label
-            kg_location_resolution["hazard_destination_num"] = hazard_destination_num
         if command_outcome.get("status") == "accepted" and action_valid is not True:
             raw_action_valid = action_valid
             action_valid = True
@@ -550,15 +441,7 @@ class LPLHAgent:
                     action_space_detail["validity_override_split_error"] = str(e)
 
         timer = time.perf_counter()
-        if is_death:
-            action_transition_result = {
-                "status": "skipped_terminal_defeat",
-                "candidate": auxiliary_gate.get("action_transition_candidate", {}),
-                "decision": auxiliary_gate.get("decision", {}).get("kg_action_transition", {}),
-                "applied": False,
-                "reason": "death destination is recorded without moving the live KG cursor",
-            }
-        elif pure_rejection:
+        if pure_rejection:
             action_transition_result = {
                 "status": "skipped_pure_rejection",
                 "candidate": auxiliary_gate.get("action_transition_candidate", {}),
@@ -569,7 +452,6 @@ class LPLHAgent:
         else:
             action_transition_result = self._apply_gate_action_transition(
                 auxiliary_gate=auxiliary_gate,
-                engine_grounded=engine_mode,
             )
         record_timing("kg_action_transition_gate", timer)
         detail["modules"]["kg_action_transition"] = action_transition_result
@@ -582,6 +464,18 @@ class LPLHAgent:
         kg_location_resolution["action_transition_status"] = (
             action_transition_result.get("status", "")
         )
+        verdict_moved = (
+            kg_location_resolution.get("gate_location_verdict", {}).get("moved")
+            == "yes"
+        )
+        if (verdict_moved
+                and action_transition_result.get("candidate")
+                and not action_transition_result.get("applied")):
+            kg_location_resolution["transition_gate_disagreement"] = {
+                "location_verdict": "moved",
+                "edge_recording": action_transition_result.get("status", "not_applied"),
+                "resolution": "location_verdict_wins",
+            }
         if action_transition_result.get("applied"):
             kg_location_resolution["confirmed_transition_type"] = "action"
             kg_location_resolution["confirmed_transition"] = (
@@ -722,25 +616,15 @@ class LPLHAgent:
         if experience_triggered:
             try:
                 history_text = self._format_history()
-                location_issued = self._first_known_location(
+                score_location = self._first_known_location(
                     prev_location,
                     self.kg_map.current_location,
                     "Starting Location",
                 )
-                score_location = (
-                    self._first_known_location(hazard_destination_label, location_issued)
-                    if is_death else location_issued
-                )
-                location_after = (
-                    score_location if is_death else self._first_known_location(
-                        self.kg_map.current_location,
-                        score_location,
-                        "Starting Location",
-                    )
-                )
-                score_location_num = (
-                    hazard_destination_num if is_death
-                    else self.kg_map.engine_num_for(score_location)
+                location_after = self._first_known_location(
+                    self.kg_map.current_location,
+                    score_location,
+                    "Starting Location",
                 )
                 score_location_fingerprint = self._location_fingerprint_hash(
                     score_location
@@ -752,12 +636,40 @@ class LPLHAgent:
                 )
                 score_event_key = ""
                 death_event_key = ""
+                precomputed_loss_summary = ""
+                grounded_death_room = ""
+                death_room_grounding = {}
+                goal_hazard = None
                 if is_death:
+                    ledger_block = self.attempt_ledger.format_room_block(
+                        score_location
+                    )
+                    precomputed_loss_summary = self.llm.summarize_loss_experience(
+                        history=history_text,
+                        reward_change=reward_change,
+                        current_score=score,
+                        fatal_action=completed_action,
+                        location=location_after,
+                        location_issued=score_location,
+                        command_history_block=ledger_block,
+                    )
+                    grounded_death_room, death_room_grounding = (
+                        self._ground_death_room_from_summary(
+                            precomputed_loss_summary,
+                            observation,
+                        )
+                    )
+                    goal_hazard = self._goal_hazard_context(
+                        action=completed_action,
+                        action_valid=action_valid,
+                        location_issued=score_location,
+                        location_after=location_after,
+                        grounded_death_room=grounded_death_room,
+                    )
                     death_event_key = self._death_event_key(
                         action=completed_action,
-                        location=score_location,
-                        location_fingerprint=score_location_fingerprint,
-                        location_num=score_location_num,
+                        location=goal_hazard["hazard_location"],
+                        location_fingerprint=goal_hazard["hazard_fingerprint"],
                     )
                 elif reward_change > 0:
                     score_event_key = self._score_event_key(
@@ -766,7 +678,6 @@ class LPLHAgent:
                         location=score_location,
                         reward_change=reward_change,
                         location_fingerprint=score_location_fingerprint,
-                        location_num=score_location_num,
                     )
                     self.earned_score_event_keys_this_epoch.add(score_event_key)
                     self.earned_score_location_reward_keys_this_epoch.add(
@@ -774,7 +685,6 @@ class LPLHAgent:
                             score_location,
                             reward_change,
                             location_fingerprint=score_location_fingerprint,
-                            location_num=score_location_num,
                         )
                     )
 
@@ -791,11 +701,21 @@ class LPLHAgent:
                         "current_score": score,
                         "location": score_location,
                         "location_fingerprint": score_location_fingerprint,
-                        "location_num": score_location_num,
                         "action": completed_action,
                         "terminal": done,
                         "terminal_status": terminal_status,
                     }
+                    if is_death and goal_hazard:
+                        score_summary_skipped.update({
+                            "location": goal_hazard["hazard_location"],
+                            "location_after": goal_hazard["hazard_location"],
+                            "location_fingerprint": goal_hazard["hazard_fingerprint"],
+                            "location_registry_id": goal_hazard.get(
+                                "hazard_registry_id", ""
+                            ),
+                            "death_room_title": grounded_death_room,
+                            "death_room_grounding": death_room_grounding,
+                        })
                     self.experience_lib.record_event(
                         event_key,
                         metadata=score_summary_skipped,
@@ -807,18 +727,7 @@ class LPLHAgent:
                 else:
                     validation = {}
                     if is_death:
-                        ledger_block = self.attempt_ledger.format_room_block(
-                            score_location
-                        )
-                        exp_summary = self.llm.summarize_loss_experience(
-                            history=history_text,
-                            reward_change=reward_change,
-                            current_score=score,
-                            fatal_action=completed_action,
-                            location=location_after,
-                            location_issued=location_issued,
-                            command_history_block=ledger_block,
-                        )
+                        exp_summary = precomputed_loss_summary
                     else:
                         exp_summary = self.llm.summarize_experience(
                             history=history_text,
@@ -848,11 +757,12 @@ class LPLHAgent:
                         "epoch": self.current_epoch,
                         "step": self.step_count,
                         "location": score_location,
-                        "location_issued": location_issued,
+                        "location_issued": score_location,
                         "location_fingerprint": score_location_fingerprint,
-                        "location_num": score_location_num,
+                        "location_registry_id": self.kg_map.registry_id_for(
+                            score_location
+                        ),
                         "location_after": location_after,
-                        "location_after_num": score_location_num if is_death else self.kg_map.engine_num_for(location_after),
                         "action": completed_action,
                         "scoring_action": (
                             completed_action if reward_change > 0 and not is_death else ""
@@ -862,6 +772,17 @@ class LPLHAgent:
                         "terminal_status": terminal_status,
                         "is_death": is_death,
                     }
+                    if is_death and goal_hazard:
+                        score_metadata.update({
+                            "location": goal_hazard["hazard_location"],
+                            "location_after": goal_hazard["hazard_location"],
+                            "location_fingerprint": goal_hazard["hazard_fingerprint"],
+                            "location_registry_id": goal_hazard.get(
+                                "hazard_registry_id", ""
+                            ),
+                            "death_room_title": grounded_death_room,
+                            "death_room_grounding": death_room_grounding,
+                        })
                     if reward_change > 0 and not is_death:
                         score_metadata["summary_validation"] = validation
                     if event_key:
@@ -893,20 +814,17 @@ class LPLHAgent:
                     logger.info(f"Experience stored: score change {reward_change:+d}")
 
                 if is_death:
-                    goal_hazard = self._goal_hazard_context(
+                    goal_hazard = goal_hazard or self._goal_hazard_context(
                         action=completed_action,
                         action_valid=action_valid,
-                        location_issued=location_issued,
+                        location_issued=score_location,
                         location_after=location_after,
-                        hazard_destination=hazard_destination_label,
-                        hazard_destination_num=hazard_destination_num,
                     )
                     goal_transition, hypothesis_log = (
                         self._handle_death_goal_lifecycle(
                             event_key=event_key,
                             hazard_location=goal_hazard["hazard_location"],
                             hazard_fingerprint=goal_hazard["hazard_fingerprint"],
-                            hazard_room_num=goal_hazard.get("hazard_room_num"),
                             fatal_action=completed_action,
                             death_observation=observation,
                             inventory_at_death=list(self.kg_map.inventory),
@@ -966,7 +884,7 @@ class LPLHAgent:
                     neutral_location_fingerprint = self._location_fingerprint_hash(
                         neutral_issued_location
                     )
-                    neutral_location_num = self.kg_map.engine_num_for(
+                    neutral_location_registry_id = self.kg_map.registry_id_for(
                         neutral_issued_location
                     )
                     event_key = self._neutral_event_key(
@@ -976,10 +894,6 @@ class LPLHAgent:
                         location=neutral_location,
                         prev_location=trigger_meta.get("prev_location"),
                         failed_attempts=trigger_meta.get("failed_attempts"),
-                        location_num=self.kg_map.engine_num_for(neutral_location),
-                        prev_location_num=self.kg_map.engine_num_for(
-                            trigger_meta.get("prev_location") or neutral_issued_location
-                        ),
                     )
                     if self.experience_lib.neutral_event_seen(event_key):
                         neutral_summaries_skipped.append({
@@ -1012,7 +926,7 @@ class LPLHAgent:
                                 "location": neutral_location,
                                 "location_issued": neutral_issued_location,
                                 "location_fingerprint": neutral_location_fingerprint,
-                                "location_num": neutral_location_num,
+                                "location_registry_id": neutral_location_registry_id,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
                                 "gate_reason": trigger_meta.get("gate_reason", ""),
@@ -1051,7 +965,7 @@ class LPLHAgent:
                                 "location": neutral_location,
                                 "location_issued": neutral_issued_location,
                                 "location_fingerprint": neutral_location_fingerprint,
-                                "location_num": neutral_location_num,
+                                "location_registry_id": neutral_location_registry_id,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "action": completed_action,
                                 "event_key": event_key,
@@ -1065,7 +979,7 @@ class LPLHAgent:
                                 "location": neutral_location,
                                 "location_issued": neutral_issued_location,
                                 "location_fingerprint": neutral_location_fingerprint,
-                                "location_num": neutral_location_num,
+                                "location_registry_id": neutral_location_registry_id,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "failed_attempts": trigger_meta.get("failed_attempts") or [],
                                 "gate_reason": trigger_meta.get("gate_reason", ""),
@@ -1095,7 +1009,6 @@ class LPLHAgent:
                                 "location": neutral_location,
                                 "location_issued": neutral_issued_location,
                                 "location_fingerprint": neutral_location_fingerprint,
-                                "location_num": neutral_location_num,
                                 "prev_location": trigger_meta.get("prev_location"),
                                 "action": completed_action,
                                 "event_key": event_key,
@@ -1201,7 +1114,7 @@ class LPLHAgent:
                 previous_location=prev_location,
                 current_location=self.kg_map.current_location,
             )
-        elif action_valid is False and completed_direction and not is_death:
+        elif (not is_death) and action_valid is False and completed_direction:
             failure_location = source_location_for_attempt
             self.kg_map.mark_direction_tried_at(
                 completed_direction,
@@ -1508,31 +1421,66 @@ class LPLHAgent:
         if not observation:
             return
         info = info or {}
+        probe_text = str(info.get("look_probe_text", "") or "")
         try:
             print("  Initial KG seed: extracting initial room/object facts...", flush=True)
             triples = self.fm.extract_relations("look", observation, max_new=192)
-            engine_num = self._coerce_engine_num(info.get("engine_location_num"))
-            engine_mode = bool(config.ENGINE_LOCATION_GROUNDING and engine_num is not None)
+            room_title = ""
+            if config.AUX_GATE_LOCATION_VERDICT:
+                try:
+                    response = self.llm.gate_auxiliary_modules(
+                        location="unknown",
+                        previous_location="unknown",
+                        action="look",
+                        action_valid=True,
+                        observation=observation,
+                        done=False,
+                        score=0,
+                        reward_change=0,
+                        rooms_visited_before=[],
+                        inventory_before=[],
+                        inventory=[],
+                        visible_objects=[],
+                        active_situations=[],
+                        recent_failed_commands=[],
+                        known_failed_commands_here="[]",
+                        problem_attempts_here="[]",
+                        recent_command_outcomes=[],
+                        same_state_tried_commands=[],
+                        action_transition_candidate={},
+                        cached_affordance_ideas_available=0,
+                        look_probe_text=probe_text,
+                    )
+                    parsed, parse_error = self._parse_auxiliary_gate_response(response)
+                    if not parse_error:
+                        raw_verdict = parsed.get("location", {})
+                        if not isinstance(raw_verdict, dict):
+                            raw_verdict = {}
+                        raw_title = self._clean_text(raw_verdict.get("room_title", ""))
+                        room_title, _ = self._ground_room_title(
+                            raw_title, observation, probe_text
+                        )
+                except Exception as e:
+                    logger.warning("Initial location gate failed: %s", e)
             room_title = (
-                self._extract_probe_room_title(info.get("look_probe_text", ""))
-                or self._extract_observation_room_title(observation)
+                room_title
+                or self._extract_probe_room_title(probe_text)
+                or self._extract_observation_room_title(observation, scan_all_lines=True)
             )
-            if engine_mode:
-                if not room_title and self._observation_is_dark(observation):
-                    room_title = "Dark place"
-                room_title = self.kg_map.resolve_arrival_location(
-                    room_title,
-                    observation=info.get("look_probe_text", "") or observation,
-                    engine_num=engine_num,
-                    engine_name=info.get("engine_location_name", ""),
-                    epoch=self.current_epoch,
-                )
-                self.kg_map.confirm_arrival(room_title, engine_num=engine_num)
-                self._current_engine_location_num = engine_num
-            elif not room_title:
+            if not room_title:
                 room_title = "Starting Location"
-            triples = self._with_authoritative_location_triple(triples, room_title)
-            self.kg_map.update(triples, "look", engine_grounded=engine_mode)
+            room_title, _ = self.kg_map.mint_room(
+                room_title,
+                observation=probe_text or observation,
+                epoch=self.current_epoch,
+            )
+            self.kg_map.confirm_arrival(
+                room_title,
+                observation=probe_text or observation,
+                from_location="",
+                action="look",
+            )
+            self.kg_map.update(triples, "look")
             title_index = observation.lower().find(room_title.lower())
             seed_observation = (
                 observation[title_index:]
@@ -1544,6 +1492,231 @@ class LPLHAgent:
         except Exception as e:
             logger.warning(f"Initial KG-map extraction failed: {e}")
             print(f"  Initial KG seed skipped: {e}", flush=True)
+
+    def _resolve_step_location(self, auxiliary_gate: dict, action: str,
+                               observation: str, look_probe_text: str,
+                               previous_location: str, done: bool) -> dict:
+        """Resolve one arrival from grounded gate text without engine identity."""
+        decision = (auxiliary_gate or {}).get("decision", {})
+        verdict = decision.get("location_verdict", {})
+        moved = self._clean_text(verdict.get("moved", "unclear")).lower()
+        if moved not in {"yes", "no", "unclear"}:
+            moved = "unclear"
+        raw_title = self._clean_text(verdict.get("room_title", ""))
+        grounded_title, grounded = self._ground_room_title(
+            raw_title, observation, look_probe_text
+        )
+        probe_title = self._extract_probe_room_title(look_probe_text)
+        fallback_title = (
+            probe_title
+            or self._extract_observation_room_title(observation, scan_all_lines=True)
+        )
+        gate_ok = (
+            config.AUX_GATE_LOCATION_VERDICT
+            and (auxiliary_gate or {}).get("status") == "routed"
+        )
+        result = {
+            "raw_room_title": raw_title,
+            "fm_location": "",
+            "title_fallback_used": False,
+            "title_overrode_fm": False,
+            "chosen_location_hint": "",
+            "previous_location": previous_location,
+            "location_after_update": self.kg_map.current_location,
+            "confirmed_transition_type": "",
+            "confirmed_transition": {},
+            "action_transition_candidate": {},
+            "action_transition_gate_decision": {},
+            "action_transition_applied": False,
+            "action_transition_status": "",
+            "gate_location_verdict": copy.deepcopy(verdict),
+            "verdict_validated": bool(grounded),
+            "probe_title": probe_title,
+            "resolver_invoked": False,
+            "resolver_decision": "",
+            "resolver_confidence": "",
+            "registry_id": self.kg_map.registry_id_for(
+                self.kg_map.current_location or ""
+            ),
+            "resolution_mode": "gate" if gate_ok else "text_fallback",
+            "location_uncertain": False,
+            "room_split": {},
+            "use_legacy_location_pipeline": False,
+        }
+        if not config.AUX_GATE_LOCATION_VERDICT:
+            return result
+        if gate_ok and moved == "no" and not self.kg_map.location_uncertain:
+            result["action_transition_status"] = "gate_no_move"
+            return result
+
+        selected_title = grounded_title if grounded else fallback_title
+        if selected_title and not grounded:
+            result["title_fallback_used"] = True
+            result["resolution_mode"] = "text_fallback"
+        if done:
+            result["chosen_location_hint"] = canonical_room_display(selected_title)
+            result["action_transition_status"] = "terminal_location_not_applied"
+            return result
+        if gate_ok and moved == "yes" and not selected_title:
+            self.kg_map.set_location_uncertain(True)
+            result["location_uncertain"] = True
+            result["action_transition_status"] = "moved_destination_unseen"
+            return result
+        if not selected_title:
+            if not gate_ok or moved == "unclear":
+                result["use_legacy_location_pipeline"] = True
+            return result
+
+        should_arrive = (
+            moved in {"yes", "unclear"} or self.kg_map.location_uncertain
+        ) if gate_ok else (
+            self._is_location_change_action(action, True)
+        )
+        if not should_arrive:
+            return result
+        description = look_probe_text or observation
+        resolved, resolver_log = self._resolve_arrival_identity(
+            title=selected_title,
+            description=description,
+            action=action,
+            from_location=previous_location,
+        )
+        result.update(resolver_log)
+        if not resolved:
+            return result
+        self.kg_map.confirm_arrival(
+            resolved,
+            observation=description,
+            from_location=previous_location,
+            action=action,
+        )
+        result["chosen_location_hint"] = resolved
+        result["location_after_update"] = resolved
+        result["registry_id"] = self.kg_map.registry_id_for(resolved)
+        candidate = (auxiliary_gate or {}).get("action_transition_candidate", {})
+        if isinstance(candidate, dict) and previous_location != resolved:
+            candidate["from"] = previous_location
+            candidate["to"] = resolved
+        return result
+
+    def _resolve_arrival_identity(self, title: str, description: str,
+                                  action: str, from_location: str) -> tuple[str, dict]:
+        title = canonical_room_display(title)
+        candidates = self.kg_map.room_candidates(title)
+        log = {
+            "resolver_invoked": False,
+            "resolver_decision": "",
+            "resolver_confidence": "",
+            "resolver_prompt": "",
+            "resolver_raw_response": "",
+        }
+        if not config.LLM_LOCATION_RESOLVER:
+            return self.kg_map.resolve_arrival_location(
+                title, description, from_location, action
+            ), log
+        if not candidates:
+            label, _ = self.kg_map.mint_room(
+                title, description, epoch=self.current_epoch
+            )
+            log.update({"resolver_decision": "new", "resolver_confidence": "high"})
+            return label, log
+        signature = self.kg_map.description_signature(title, description)
+        cache_key = (
+            from_location or "", normalize_command_key(action),
+            self.kg_map._base_location_key(title), signature,
+        )
+        cached = self._location_resolver_cache.get(cache_key)
+        if cached:
+            return cached["label"], {**log, **cached["log"], "resolver_cached": True}
+
+        cards = self.kg_map.candidate_cards(title, limit=4)
+        map_evidence = self.kg_map.known_edge_evidence(
+            from_location, action, title
+        )
+        parsed = {}
+        parse_error = ""
+        for _ in range(2):
+            try:
+                body = self.llm.resolve_location_identity(
+                    title=title,
+                    description=description,
+                    action=action,
+                    from_location=from_location,
+                    candidate_cards=cards,
+                    map_evidence=map_evidence,
+                )
+                log["resolver_invoked"] = True
+                log["resolver_prompt"] = self.llm.last_location_resolver_prompt or ""
+                log["resolver_raw_response"] = (
+                    self.llm.last_location_resolver_raw_response or ""
+                )
+                parsed, parse_error = self._parse_location_resolver_response(
+                    body, [card["label"] for card in cards]
+                )
+                if not parse_error:
+                    break
+            except Exception as e:
+                parse_error = str(e)
+        confidence = self._clean_text(parsed.get("confidence", "low")).lower()
+        decision = self._clean_text(parsed.get("decision", "new")).lower()
+        if parse_error or confidence == "low" or decision != "existing":
+            label, _ = self.kg_map.mint_room(
+                title, description, epoch=self.current_epoch, force_new=True
+            )
+            decision = "new"
+        else:
+            label = parsed.get("match_label", "")
+        log["resolver_decision"] = decision
+        log["resolver_confidence"] = confidence or "low"
+        if parse_error:
+            log["resolver_error"] = parse_error
+        self._location_resolver_cache[cache_key] = {"label": label, "log": dict(log)}
+        return label, log
+
+    def _parse_location_resolver_response(self, response_body: str,
+                                          offered_labels: list[str]) -> tuple[dict, str]:
+        body = str(response_body or "").strip()
+        match = re.search(r"\|start\|\s*(.*?)\s*\|end\|", body, re.DOTALL)
+        if match:
+            body = match.group(1).strip()
+        try:
+            parsed = json.loads(body)
+        except Exception:
+            return {}, "resolver response was not valid JSON"
+        decision = self._clean_text(parsed.get("decision", "")).lower()
+        confidence = self._clean_text(parsed.get("confidence", "")).lower()
+        label = self._clean_text(parsed.get("match_label", ""))
+        if decision not in {"existing", "new"}:
+            return {}, "resolver decision was invalid"
+        if confidence not in {"high", "medium", "low"}:
+            return {}, "resolver confidence was invalid"
+        if decision == "existing" and label not in offered_labels:
+            return {}, "resolver selected an unoffered candidate"
+        return {
+            "decision": decision,
+            "match_label": label,
+            "confidence": confidence,
+            "reason": self._clean_text(parsed.get("reason", "")),
+        }, ""
+
+    def _ground_room_title(self, raw_title: str, observation: str,
+                           look_probe_text: str) -> tuple[str, bool]:
+        raw = str(raw_title or "").strip()
+        if not raw:
+            return "", False
+        if raw in str(observation or "") or raw in str(look_probe_text or ""):
+            return canonical_room_display(raw), True
+        return "", False
+
+    def _extract_probe_room_title(self, probe_text: str) -> str:
+        return self._extract_observation_room_title(probe_text, scan_all_lines=True)
+
+    def _observation_is_dark(self, observation: str) -> bool:
+        text = str(observation or "").lower()
+        return any(phrase in text for phrase in (
+            "pitch black", "too dark to see", "can't see a thing",
+            "cannot see a thing", "unable to see", "darkness",
+        ))
 
     def _location_from_triples(self, triples: list) -> str:
         for subj, rel, obj in triples or []:
@@ -1576,37 +1749,6 @@ class LPLHAgent:
             output.insert(0, ("You", "in", cleaned_location))
         return output
 
-    def _extract_probe_room_title(self, probe_text: str) -> str:
-        """Read the first display line from a state-preserving look probe."""
-        text = str(probe_text or "").strip()
-        if not text:
-            return ""
-        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
-        candidate = canonical_room_display(first_line)
-        if not candidate or self._observation_is_dark(first_line):
-            return ""
-        return candidate if len(candidate.split()) <= 8 else ""
-
-    def _coerce_engine_num(self, value):
-        try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    def _observation_is_dark(self, observation: str) -> bool:
-        text = str(observation or "").lower()
-        return any(phrase in text for phrase in (
-            "pitch black", "too dark to see", "can't see a thing",
-            "cannot see a thing", "darkness", "it is dark",
-        ))
-
-    def _canonical_navigation_direction(self, action: str) -> str:
-        command = re.sub(r"\s+", " ", str(action or "").strip().lower())
-        if command.startswith("go "):
-            command = command[3:].strip()
-        direction = self.kg_map._canonical_direction(command)
-        return direction if direction in self.kg_map._direction_set() else ""
-
     def _extract_observation_room_title(self, observation: str,
                                         scan_all_lines: bool = False) -> str:
         """Conservative parser for IF room-title headers."""
@@ -1616,12 +1758,10 @@ class LPLHAgent:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if scan_all_lines:
             for line in lines:
-                lower = line.lower()
-                if any(marker in lower for marker in (
-                    "you have died", "you are dead", "game over", "the end",
-                )):
-                    continue
-                if re.match(r"^\s*[^A-Za-z0-9]+\s*[A-Za-z0-9].*[A-Za-z0-9]\s*[^A-Za-z0-9]+\s*$", line):
+                if re.match(
+                    r"^\s*[^A-Za-z0-9]+\s*[A-Za-z0-9].*[A-Za-z0-9]\s*[^A-Za-z0-9]+\s*$",
+                    line,
+                ):
                     candidate = canonical_room_display(line)
                     if candidate and len(candidate.split()) <= 8:
                         return candidate
@@ -2076,7 +2216,8 @@ class LPLHAgent:
                             score: int, reward_change: int, action_valid,
                             prev_location: str,
                             inventory_before: set = None,
-                            visited_rooms_before: set = None) -> dict:
+                            visited_rooms_before: set = None,
+                            look_probe_text: str = "") -> dict:
         """Use one aux LLM call to route selected expensive helper modules."""
         location = self.kg_map.current_location or "unknown"
         rooms_visited_before = sorted(str(room) for room in (visited_rooms_before or []))
@@ -2123,12 +2264,13 @@ class LPLHAgent:
             attempt_counts=self.attempt_ledger.counts_for_location(location),
         )
         prev_lower = str(action or "").lower().strip()
+        navigation_direction = self._blocked_direction_for_command(action)
         action_transition_candidate = {}
         if (action_valid is True
                 and prev_location
                 and location
                 and location != prev_location
-                and prev_lower not in self.kg_map._direction_set()):
+                and not navigation_direction):
             action_transition_candidate = {
                 "from": prev_location,
                 "command": action,
@@ -2137,8 +2279,13 @@ class LPLHAgent:
             }
         elif (not self._is_pure_rejected_observation(action_valid, observation)
               and prev_location
-              and prev_lower not in self.kg_map._direction_set()):
-            room_title = self._extract_observation_room_title(observation)
+              and not navigation_direction):
+            room_title = (
+                self._extract_probe_room_title(look_probe_text)
+                or self._extract_observation_room_title(
+                    observation, scan_all_lines=True
+                )
+            )
             if room_title:
                 current_key = normalize_location_key(location or "") or "unknown"
                 title_key = normalize_location_key(room_title) or "unknown"
@@ -2161,6 +2308,7 @@ class LPLHAgent:
             "action": action,
             "action_valid": action_valid,
             "observation": observation,
+            "look_probe_text": look_probe_text,
             "done": bool(done),
             "score": score,
             "reward_change": reward_change,
@@ -2209,6 +2357,7 @@ class LPLHAgent:
                 same_state_tried_commands=same_state_tried_commands,
                 action_transition_candidate=action_transition_candidate,
                 cached_affordance_ideas_available=len(cached_affordance_ideas),
+                look_probe_text=look_probe_text,
             )
             result["prompt"] = self.llm.last_auxiliary_gate_prompt or ""
             result["llm_raw_response"] = self.llm.last_auxiliary_gate_raw_response or ""
@@ -2410,8 +2559,7 @@ class LPLHAgent:
             result["finish_reason"] = self.llm.last_world_state_extraction_finish_reason or ""
         return result
 
-    def _apply_gate_action_transition(self, auxiliary_gate: dict,
-                                      engine_grounded: bool = False) -> dict:
+    def _apply_gate_action_transition(self, auxiliary_gate: dict) -> dict:
         """Record a non-cardinal action transition only if the aux gate approves."""
         decision = (auxiliary_gate or {}).get("decision", {})
         transition_decision = decision.get("kg_action_transition", {})
@@ -2426,10 +2574,6 @@ class LPLHAgent:
         }
         if not candidate:
             result["status"] = "no_candidate"
-            return result
-        if engine_grounded:
-            result["status"] = "gate_overruled_by_engine"
-            result["reason"] = "engine object identity is authoritative for movement"
             return result
         if not isinstance(transition_decision, dict) or not transition_decision.get("record"):
             result["status"] = "gate_rejected"
@@ -2661,6 +2805,9 @@ class LPLHAgent:
             "command_outcome": command_outcome,
             "terminal_outcome": self._normalize_terminal_outcome(
                 parsed.get("terminal", parsed.get("terminal_outcome", "none"))
+            ),
+            "location_verdict": self._normalize_gate_location_verdict(
+                parsed.get("location", parsed.get("location_verdict", {}))
             ),
             "environmental_change": {
                 "changed": env_changed,
@@ -2954,6 +3101,10 @@ class LPLHAgent:
                 "reason": "Gate unavailable.",
             },
             "terminal_outcome": "none",
+            "location_verdict": {
+                "moved": "unclear",
+                "room_title": "",
+            },
             "environmental_change": {
                 "changed": False,
                 "evidence": "Gate unavailable; legacy environmental detector should run.",
@@ -3007,6 +3158,17 @@ class LPLHAgent:
                 "items_removed": [],
                 "reason": "Gate unavailable.",
             },
+        }
+
+    def _normalize_gate_location_verdict(self, value) -> dict:
+        if not isinstance(value, dict):
+            value = {}
+        moved = self._clean_text(value.get("moved", "unclear")).lower()
+        if moved not in {"yes", "no", "unclear"}:
+            moved = "unclear"
+        return {
+            "moved": moved,
+            "room_title": self._clean_text(value.get("room_title", ""))[:160],
         }
 
     def _environmental_change_detail_from_gate(self, gate_result: dict,
@@ -3359,7 +3521,6 @@ class LPLHAgent:
             location,
             reward,
             location_fingerprint=metadata.get("enables_location_fingerprint", ""),
-            location_num=metadata.get("enables_location_num"),
         )
 
     def _score_location_reward_from_metadata_earned(self, metadata: dict) -> bool:
@@ -3373,12 +3534,10 @@ class LPLHAgent:
             location,
             reward,
             location_fingerprint=metadata.get("location_fingerprint", ""),
-            location_num=metadata.get("location_num"),
         )
 
     def _score_location_reward_earned(self, location, reward,
-                                      location_fingerprint: str = "",
-                                      location_num=None) -> bool:
+                                      location_fingerprint: str = "") -> bool:
         try:
             reward_int = int(reward)
         except Exception:
@@ -3387,7 +3546,6 @@ class LPLHAgent:
             str(location or ""),
             reward_int,
             location_fingerprint=location_fingerprint,
-            location_num=location_num,
         )
         return bool(key and key in self.earned_score_location_reward_keys_this_epoch)
 
@@ -3396,20 +3554,15 @@ class LPLHAgent:
         """Match the physical issuing room; neighbors and destinations never qualify."""
         metadata = record.get("metadata") or {}
         current = self.kg_map.current_location or ""
-        kind = metadata.get("kind") or metadata.get("trigger")
-        if kind == "death_warning":
-            record_location = metadata.get("location_after") or metadata.get("location") or ""
-        else:
-            record_location = metadata.get("location_issued") or metadata.get("location") or ""
+        record_location = metadata.get("location_issued") or metadata.get("location") or ""
         if not current or not record_location:
             return False
 
-        record_num = self._coerce_engine_num(metadata.get("location_num"))
-        current_num = self.kg_map.engine_num_for(current)
-        if record_num is not None and current_num is not None:
-            return int(record_num) == int(current_num)
-
         record_fingerprint = str(metadata.get("location_fingerprint") or "")
+        record_registry_id = str(metadata.get("location_registry_id") or "")
+        current_registry_id = self.kg_map.registry_id_for(current)
+        if record_registry_id and current_registry_id:
+            return record_registry_id == current_registry_id
         current_fingerprint = self._location_fingerprint_hash(current)
         if record_fingerprint and current_fingerprint:
             record_base = self._base_location_identity_key(record_location)
@@ -3444,7 +3597,6 @@ class LPLHAgent:
             "location": metadata.get("location", ""),
             "location_issued": metadata.get("location_issued", ""),
             "location_fingerprint": metadata.get("location_fingerprint", ""),
-            "location_num": metadata.get("location_num"),
             "prev_location": metadata.get("prev_location", ""),
             "action": metadata.get("action", ""),
             "score_change": metadata.get("score_change", ""),
@@ -3621,12 +3773,7 @@ class LPLHAgent:
             fingerprint = self._clean_text(metadata.get("location_fingerprint"))
         if not fingerprint:
             fingerprint = self._location_fingerprint_hash(location)
-        location_num = metadata.get("location_after_num") or metadata.get("location_num")
-        return self._hazard_room_identity_key(
-            location,
-            fingerprint,
-            location_num=location_num,
-        )
+        return self._hazard_room_identity_key(location, fingerprint)
 
     def _route_for_current_room(self, record: dict) -> bool:
         metadata = record.get("metadata") or {}
@@ -4001,20 +4148,53 @@ class LPLHAgent:
         result["active_situations_after"] = self.situation_memory.active_situations()
         return result
 
+    def _ground_death_room_from_summary(self, summary: str,
+                                        terminal_observation: str) -> tuple[str, dict]:
+        """Accept a death-room title only when copied from terminal game text."""
+        body = str(summary or "").strip()
+        match = re.search(r"\{.*\}", body, re.DOTALL)
+        try:
+            parsed = json.loads(match.group(0) if match else body)
+        except Exception:
+            return "", {"status": "summary_not_json"}
+        raw = self._clean_text(parsed.get("death_room_title", ""))
+        if not raw:
+            return "", {"status": "empty"}
+        if raw not in str(terminal_observation or ""):
+            return "", {"status": "ungrounded", "raw_title": raw}
+        canonical = canonical_room_display(raw)
+        return canonical, {
+            "status": "grounded",
+            "raw_title": raw,
+            "canonical_title": canonical,
+        }
+
     def _goal_hazard_context(self, action: str, action_valid,
                              location_issued: str,
                              location_after: str,
-                             hazard_destination: str = "",
-                             hazard_destination_num=None) -> dict:
+                             grounded_death_room: str = "") -> dict:
         """Resolve a repeated death's hazard room and its entry gateway."""
         issued = self._first_known_location(location_issued, "Starting Location")
+        destination = ""
+        hazard_registry_id = ""
+        source = ""
+        if grounded_death_room:
+            candidates = self.kg_map.room_candidates(grounded_death_room)
+            if len(candidates) == 1:
+                destination = candidates[0]
+                hazard_registry_id = self.kg_map.registry_id_for(destination)
+                source = "grounded_death_room_registry_match"
+            else:
+                destination = canonical_room_display(grounded_death_room)
+                source = (
+                    "grounded_death_room_base_ambiguous"
+                    if len(candidates) > 1 else "grounded_death_room_base_only"
+                )
         destination = self._first_known_location(
-            hazard_destination,
-            location_after,
-            issued,
+            destination, location_after, issued
         )
         moved_to_destination = (
-            bool(hazard_destination)
+            bool(grounded_death_room)
             or self._is_location_change_action(action, True)
         ) and (
             normalize_location_key(destination)
@@ -4023,20 +4203,29 @@ class LPLHAgent:
         if moved_to_destination:
             return {
                 "hazard_location": destination,
-                "hazard_fingerprint": self._location_fingerprint_hash(destination),
-                "hazard_room_num": hazard_destination_num,
+                "hazard_fingerprint": (
+                    hazard_registry_id
+                    or self._location_fingerprint_hash(destination)
+                    or f"base:{normalize_location_key(destination) or 'unknown'}"
+                ),
+                "hazard_registry_id": hazard_registry_id,
                 "gateway": {
                     "room": issued,
-                    "fingerprint": self._location_fingerprint_hash(issued),
-                    "room_num": self.kg_map.engine_num_for(issued),
+                    "fingerprint": (
+                        self.kg_map.registry_id_for(issued)
+                        or self._location_fingerprint_hash(issued)
+                    ),
                     "command": self._clean_text(action) or "unknown",
                 },
-                "source": "fatal_movement_destination",
+                "source": source or "fatal_movement_destination",
             }
         return {
             "hazard_location": issued,
-            "hazard_fingerprint": self._location_fingerprint_hash(issued),
-            "hazard_room_num": self.kg_map.engine_num_for(issued),
+            "hazard_fingerprint": (
+                self.kg_map.registry_id_for(issued)
+                or self._location_fingerprint_hash(issued)
+            ),
+            "hazard_registry_id": self.kg_map.registry_id_for(issued),
             "gateway": None,
             "source": "fatal_action_issuing_room",
         }
@@ -4053,9 +4242,8 @@ class LPLHAgent:
 
         previous_goal = self.situation_memory.find_goal_for_room(
             previous,
-            self._location_fingerprint_hash(previous),
+            self._room_memory_identity(previous),
             open_only=True,
-            hazard_room_num=self.kg_map.engine_num_for(previous),
         )
         if previous_goal and not done:
             goal_id = previous_goal.get("goal_id", "")
@@ -4093,9 +4281,8 @@ class LPLHAgent:
 
         current_goal = self.situation_memory.find_goal_for_room(
             current,
-            self._location_fingerprint_hash(current),
+            self._room_memory_identity(current),
             open_only=True,
-            hazard_room_num=self.kg_map.engine_num_for(current),
         )
         if current_goal:
             goal_id = current_goal.get("goal_id", "")
@@ -4114,15 +4301,13 @@ class LPLHAgent:
                                      fatal_action: str,
                                      death_observation: str,
                                      inventory_at_death: list,
-                                     gateway: dict = None,
-                                     hazard_room_num=None) -> tuple[dict, dict]:
+                                     gateway: dict = None) -> tuple[dict, dict]:
         """Update one advisory preparation goal for every death in a room."""
         inventory = [self._clean_text(item) for item in inventory_at_death or []]
         inventory = [item for item in inventory if item]
         room_key = self._hazard_room_identity_key(
             hazard_location,
             hazard_fingerprint,
-            location_num=hazard_room_num,
         )
         room_deaths = getattr(self, "_hazard_room_deaths", None)
         if room_deaths is None:
@@ -4158,14 +4343,12 @@ class LPLHAgent:
         existing = self.situation_memory.find_goal_for_room(
             hazard_location,
             hazard_fingerprint,
-            hazard_room_num=hazard_room_num,
         )
         transition = {
             "type": "room_death_goal",
             "event_key": event_key,
             "hazard_location": hazard_location,
             "hazard_fingerprint": hazard_fingerprint,
-            "hazard_room_num": hazard_room_num,
             "hazard_room_key": room_key,
             "room_death_count": room_death_count,
             "fatal_action": fatal_action,
@@ -4302,7 +4485,6 @@ class LPLHAgent:
         created, goal, status = self.situation_memory.add_goal_situation(
             hazard_location=hazard_location,
             hazard_fingerprint=hazard_fingerprint,
-            hazard_room_num=hazard_room_num,
             fatal_action=first_evidence.get("fatal_action") or fatal_action,
             gateway=resolved_gateway,
             hazard_text=hazard_text,
@@ -4324,7 +4506,6 @@ class LPLHAgent:
             goal = self.situation_memory.find_goal_for_room(
                 hazard_location,
                 hazard_fingerprint,
-                hazard_room_num=hazard_room_num,
             ) or goal
         transition.update({
             "status": status,
@@ -4417,12 +4598,10 @@ class LPLHAgent:
         }
         return bool(inventory_tokens & requirement_tokens)
 
-    def _hazard_room_identity_key(self, location: str, fingerprint: str = "",
-                                  location_num=None) -> str:
+    def _hazard_room_identity_key(self, location: str, fingerprint: str = "") -> str:
         base, resolved_fingerprint = self._event_location_identity(
             location,
             location_fingerprint=fingerprint,
-            location_num=location_num,
         )
         return f"{base}|{resolved_fingerprint or 'no-fingerprint'}"
 
@@ -4469,25 +4648,23 @@ class LPLHAgent:
 
     def _neutral_event_key(self, trigger: str, action: str, observation: str,
                            location: str, prev_location: str = None,
-                           failed_attempts: list = None,
-                           location_num=None, prev_location_num=None) -> str:
+                           failed_attempts: list = None) -> str:
         """Build a stable key for neutral-summary dedup across epochs."""
         trigger_norm = self._normalize_event_piece(trigger)
         action_norm = normalize_command_key(action) or "unknown"
-        location_norm = normalize_location_key(location) or "unknown"
-        try:
-            if location_num is not None:
-                location_norm = f"{location_norm}:obj{int(location_num)}"
-        except (TypeError, ValueError):
-            pass
+        location_base, location_identity = self._event_location_identity(location)
+        location_norm = (
+            f"{location_base}:{location_identity}"
+            if location_identity else location_base
+        )
 
         if trigger_norm == "navigation":
-            prev_norm = normalize_location_key(prev_location or "unknown") or "unknown"
-            try:
-                if prev_location_num is not None:
-                    prev_norm = f"{prev_norm}:obj{int(prev_location_num)}"
-            except (TypeError, ValueError):
-                pass
+            prev_base, prev_identity = self._event_location_identity(
+                prev_location or "unknown"
+            )
+            prev_norm = (
+                f"{prev_base}:{prev_identity}" if prev_identity else prev_base
+            )
             return f"neutral:v1:navigation:{prev_norm}:{action_norm}:{location_norm}"
 
         if trigger_norm in {"narrative", "environmental"}:
@@ -4519,20 +4696,23 @@ class LPLHAgent:
                 canonical = location_text
             fingerprint = fingerprints.get(canonical, "")
         if not fingerprint:
-            try:
-                wanted = canonical_room_display(location_text)
-                fingerprint = next(
-                    (
-                        value for key, value in fingerprints.items()
-                        if canonical_room_display(key) == wanted and value
-                    ),
-                    "",
-                )
-            except Exception:
-                fingerprint = ""
+            wanted = canonical_room_display(location_text)
+            fingerprint = next(
+                (
+                    value for key, value in fingerprints.items()
+                    if canonical_room_display(key) == wanted and value
+                ),
+                "",
+            )
         if not fingerprint:
             return ""
         return hashlib.sha1(str(fingerprint).encode("utf-8")).hexdigest()[:12]
+
+    def _room_memory_identity(self, location: str) -> str:
+        return (
+            self.kg_map.registry_id_for(location)
+            or self._location_fingerprint_hash(location)
+        )
 
     def _base_location_identity_key(self, location: str) -> str:
         """Normalize a room title without its visit-order-dependent #N suffix."""
@@ -4540,18 +4720,12 @@ class LPLHAgent:
         return normalize_location_key(base) or "unknown"
 
     def _event_location_identity(self, location: str,
-                                 location_fingerprint: str = None,
-                                 location_num=None) -> tuple[str, str]:
+                                 location_fingerprint: str = None) -> tuple[str, str]:
         """Return a stable location key plus fingerprint for event identities."""
-        if location_num is None:
-            kg_map = getattr(self, "kg_map", None)
-            if kg_map is not None:
-                location_num = kg_map.engine_num_for(location)
-        try:
-            if location_num is not None:
-                return self._base_location_identity_key(location), f"obj{int(location_num)}"
-        except (TypeError, ValueError):
-            pass
+        kg_map = getattr(self, "kg_map", None)
+        registry_id = kg_map.registry_id_for(location) if kg_map is not None else ""
+        if registry_id:
+            return self._base_location_identity_key(location), registry_id
         fingerprint = (
             self._location_fingerprint_hash(location)
             if location_fingerprint is None
@@ -4563,15 +4737,13 @@ class LPLHAgent:
 
     def _score_event_key(self, trigger: str, action: str, location: str,
                          reward_change: int,
-                         location_fingerprint: str = None,
-                         location_num=None) -> str:
+                         location_fingerprint: str = None) -> str:
         """Build a stable key for score-gain summary dedup across epochs."""
         trigger_norm = self._normalize_event_piece(trigger)
         action_norm = normalize_command_key(action) or "unknown"
         location_norm, fingerprint = self._event_location_identity(
             location,
             location_fingerprint,
-            location_num,
         )
         return (
             f"score:v1:{trigger_norm}:{location_norm}:{fingerprint}:"
@@ -4579,14 +4751,12 @@ class LPLHAgent:
         )
 
     def _death_event_key(self, action: str, location: str,
-                         location_fingerprint: str = None,
-                         location_num=None) -> str:
+                         location_fingerprint: str = None) -> str:
         """Build a stable key for fatal-action summary dedup across epochs."""
         action_norm = normalize_command_key(action) or "unknown"
         location_norm, fingerprint = self._event_location_identity(
             location,
             location_fingerprint,
-            location_num,
         )
         return f"death:v1:{location_norm}:{fingerprint}:{action_norm}"
 
@@ -4611,12 +4781,10 @@ class LPLHAgent:
         ))
 
     def _score_location_reward_key(self, location: str, reward_change: int,
-                                   location_fingerprint: str = None,
-                                   location_num=None) -> str:
+                                   location_fingerprint: str = None) -> str:
         location_norm, fingerprint = self._event_location_identity(
             location,
             location_fingerprint,
-            location_num,
         )
         return (
             f"score_location_reward:v1:{location_norm}:{fingerprint}:"
@@ -4648,13 +4816,10 @@ class LPLHAgent:
             scoring_location_fingerprint = self._location_fingerprint_hash(
                 scoring_location
             )
-            enabler_location_num = self.kg_map.engine_num_for(enabler_location)
-            scoring_location_num = self.kg_map.engine_num_for(scoring_location)
             enabler_location_key, enabler_fingerprint_key = (
                 self._event_location_identity(
                     enabler_location,
                     enabler_location_fingerprint,
-                    enabler_location_num,
                 )
             )
 
@@ -4692,7 +4857,9 @@ class LPLHAgent:
                 "location": enabler_location,
                 "location_issued": enabler_location,
                 "location_fingerprint": enabler_location_fingerprint,
-                "location_num": enabler_location_num,
+                "location_registry_id": self.kg_map.registry_id_for(
+                    enabler_location
+                ),
                 "action": enabler_action,
                 "enabler_action": enabler_action,
                 "enables_event_key": score_event_key,
@@ -4700,7 +4867,9 @@ class LPLHAgent:
                 "enables_scoring_action": scoring_action,
                 "enables_location": scoring_location,
                 "enables_location_fingerprint": scoring_location_fingerprint,
-                "enables_location_num": scoring_location_num,
+                "enables_location_registry_id": self.kg_map.registry_id_for(
+                    scoring_location
+                ),
                 "location_after": location_after,
                 "steps_before_reward": int(steps_before),
                 "epoch": int(self.current_epoch),

@@ -1,11 +1,11 @@
 # Current State
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
-This folder is the engine-grounded KG-map experimental version:
+This folder is the LLM-centered room-identity experimental version:
 
 ```text
-versions/lplh2_engine_location_patch_2026-07-12
+versions/lplh2_llm_location_identity_patch_2026-07-13
 ```
 
 It is built on:
@@ -16,9 +16,12 @@ versions/lplh2_goal_situation_roomlevel_patch_2026-07-12
 
 ## Included
 
-- Stable Jericho object-number room identity with text-only display labels.
-- Engine-confirmed navigation edges and hygienic FM triple handling.
-- Num-aware event, retrieval, death-warning, and goal identities.
+- Grounded gate location verdicts and state-preserving look probes.
+- LLM same-title arrival resolution with conservative new-room fallback/cache.
+- Persistent text-derived room registry and registry-backed event identities.
+- Strict FM triple hygiene and contradiction-triggered room splitting.
+- Grounded terminal death-room titles and offline-only engine evaluation ids.
+- `eval_map_accuracy.py` for accuracy, merge, and split reporting.
 - Persistent room-level death counters and compact fatal-action evidence.
 - Goal creation after two deaths in one room, independent of fatal command key.
 - Concrete hypothesis item keywords for inventory matching.
