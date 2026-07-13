@@ -98,7 +98,9 @@ class KGMap:
 
             # Handle objects in location: <Location, have, object>
             elif rel_lower == "have":
-                loc = self._resolve_location_subject(subj_clean, new_location)
+                loc = self._resolve_location_subject_legacy(
+                    subj_clean, new_location
+                )
                 if loc:
                     loc = self._ensure_node(loc)
                     if (self._should_store_room_object(loc, obj_clean)
@@ -110,7 +112,9 @@ class KGMap:
 
             # Handle directional connections: <Location, direction, Destination>
             elif rel_lower in self._direction_set():
-                loc = self._resolve_location_subject(subj_clean, new_location)
+                loc = self._resolve_location_subject_legacy(
+                    subj_clean, new_location
+                )
                 if loc:
                     loc = self._ensure_node(loc)
                     direction = self._canonical_direction(rel_lower)
@@ -128,7 +132,9 @@ class KGMap:
 
             # Handle requirements: <Location, need/require, action>
             elif rel_lower in ("need", "require"):
-                loc = self._resolve_location_subject(subj_clean, new_location)
+                loc = self._resolve_location_subject_legacy(
+                    subj_clean, new_location
+                )
                 if loc:
                     loc = self._ensure_node(loc)
                     if obj_clean not in self.nodes[loc].get("needs", []):
@@ -645,6 +651,18 @@ class KGMap:
             return current
         if subject_key == self._base_location_key(current):
             return current
+        return None
+
+    def _resolve_location_subject_legacy(self, subject: str,
+                                         new_location: str = None):
+        """Preserve the baseline subject rules for explicit fallback mode."""
+        if subject == "[Location]":
+            return new_location or self.current_location
+        subject_key = self._location_key(subject)
+        if new_location and subject_key == self._location_key(new_location):
+            return new_location
+        if subject_key in self.location_aliases:
+            return self.location_aliases[subject_key]
         return None
 
     def _add_object_relation(self, loc: str, subject: str, relation: str, obj: str):

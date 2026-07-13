@@ -74,13 +74,15 @@ class LLMTextLocationTests(unittest.TestCase):
     def test_ungrounded_gate_title_uses_probe_fallback(self):
         agent = self._agent()
         start = self._seed(agent, "Outside", "Outside\nA street.")
+        gate = self._gate("yes", "Invented Room")
         result = agent._resolve_step_location(
-            self._gate("yes", "Invented Room"), "north",
+            gate, "north",
             "You walk onward.", "<< Hallway >>\nA narrow hall.", start, False,
         )
         self.assertEqual(agent.kg_map.current_location, "Hallway")
         self.assertFalse(result["verdict_validated"])
         self.assertEqual(result["resolution_mode"], "text_fallback")
+        self.assertEqual(gate["action_transition_candidate"], {})
 
     def test_probe_finds_title_after_rejection_prefix(self):
         agent = self._agent()
@@ -194,6 +196,39 @@ class LLMTextLocationTests(unittest.TestCase):
         self.assertEqual(context["hazard_location"], sauna)
         self.assertEqual(agent.kg_map.current_location, outside)
 
+    def test_death_warning_keeps_issuing_room_retrieval_identity(self):
+        agent = self._agent()
+        outside = self._seed(agent, "Outside", "Outside\nA street.")
+        outside_id = agent.kg_map.registry_id_for(outside)
+        pool, pool_id = agent.kg_map.mint_room(
+            "Pool", "Pool\nDeep water.", epoch=1
+        )
+        metadata = agent._attach_death_hazard_metadata(
+            {
+                "kind": "death_warning",
+                "location": outside,
+                "location_issued": outside,
+                "location_fingerprint": agent._location_fingerprint_hash(outside),
+                "location_registry_id": outside_id,
+            },
+            goal_hazard={
+                "hazard_location": pool,
+                "hazard_fingerprint": pool_id,
+                "hazard_registry_id": pool_id,
+            },
+            grounded_death_room=pool,
+            death_room_grounding={"status": "grounded"},
+        )
+        self.assertEqual(metadata["location"], outside)
+        self.assertEqual(metadata["location_registry_id"], outside_id)
+        self.assertEqual(metadata["location_after"], pool)
+        self.assertEqual(metadata["hazard_registry_id"], pool_id)
+        self.assertTrue(agent._warning_experience_relevant({"metadata": metadata}))
+
+    def test_uncertain_source_cannot_ground_navigation_writes(self):
+        self.assertFalse(LPLHAgent._source_navigation_writes_allowed(True))
+        self.assertTrue(LPLHAgent._source_navigation_writes_allowed(False))
+
     def test_decoration_normalization_has_one_display(self):
         self.assertEqual(canonical_room_display("<< Outside >>"), "Outside")
         self.assertEqual(canonical_room_display("-- Outside --"), "Outside")
@@ -207,13 +242,37 @@ class LLMTextLocationTests(unittest.TestCase):
             config.AUX_GATE_LOCATION_VERDICT = False
             config.LLM_LOCATION_RESOLVER = False
             agent = self._agent()
+            outside = self._seed(agent, "Outside", "Outside\nA street.")
             result = agent._resolve_step_location(
-                self._gate("yes", "Kitchen"), "north", "Kitchen\nA room.",
-                "", "", False,
+                self._gate("yes", "Kitchen"), "enter window",
+                "Kitchen\nA room.", "", outside, False,
             )
-            agent.kg_map._legacy_update([("You", "in", "Kitchen")], "north")
+            transition = agent._apply_gate_action_transition(
+                {
+                    "decision": {
+                        "kg_action_transition": {
+                            "record": True,
+                            "reason": "test",
+                        }
+                    },
+                    "action_transition_candidate": {
+                        "from": outside,
+                        "command": "enter window",
+                        "to": "Kitchen",
+                    },
+                },
+                use_legacy_location_pipeline=True,
+            )
             self.assertEqual(result["resolution_mode"], "text_fallback")
             self.assertEqual(agent.kg_map.current_location, "Kitchen")
+            self.assertTrue(transition["applied"])
+
+            agent.kg_map._legacy_update([
+                ("[Location]", "have", "table"),
+                ("Kitchen", "need", "key"),
+            ], "look")
+            self.assertIn("table", agent.kg_map.nodes["Kitchen"]["have"])
+            self.assertIn("key", agent.kg_map.nodes["Kitchen"]["needs"])
         finally:
             config.AUX_GATE_LOCATION_VERDICT = old_gate
             config.LLM_LOCATION_RESOLVER = old_resolver

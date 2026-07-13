@@ -14,6 +14,16 @@ only in the steplog for offline evaluation. They are never put in agent `info`,
 prompts, memories, event keys, or the registry. Terminal room titles are copied
 by the death summarizer and substring-validated before hazard memories use them.
 
+Post-review corrections keep movement-death warnings retrievable from the room
+where the fatal command is issued while storing the grounded hazard room in
+separate destination fields. Navigation facts are suppressed for the first
+visible step after an unknown dark location because the remembered source room
+is stale. Legacy fallback mode again uses the baseline subject resolver and
+gate-approved transition repair. Canonical decoration stripping and registry
+naming remain intentionally always-on bookkeeping normalization, so fallback
+labels can differ cosmetically from the baseline even though its movement and
+triple semantics are restored.
+
 ## 2026-07-12: room-level lifecycle and merged warnings
 
 Created from:

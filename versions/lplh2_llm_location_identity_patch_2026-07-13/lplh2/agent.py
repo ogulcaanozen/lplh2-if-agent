@@ -198,6 +198,9 @@ class LPLHAgent:
 
         visited_rooms_before = set(self.kg_map.visited_rooms)
         prev_location = self.kg_map.current_location
+        was_location_uncertain_at_step_start = bool(
+            self.kg_map.location_uncertain
+        )
         inventory_before = set(self.kg_map.inventory)
 
         action_valid = None
@@ -251,6 +254,22 @@ class LPLHAgent:
             previous_location=prev_location,
             done=done,
         )
+        source_navigation_writes_allowed = (
+            self._source_navigation_writes_allowed(
+                was_location_uncertain_at_step_start
+            )
+        )
+        if not source_navigation_writes_allowed:
+            suppressed_candidate = copy.deepcopy(
+                auxiliary_gate.get("action_transition_candidate", {})
+            )
+            if suppressed_candidate:
+                auxiliary_gate["suppressed_action_transition_candidate"] = (
+                    suppressed_candidate
+                )
+            auxiliary_gate["action_transition_candidate"] = {}
+            kg_location_resolution["action_transition_candidate"] = {}
+            kg_location_resolution["source_navigation_writes_suppressed"] = True
 
         extracted_triples = []
         applied_triples = []
@@ -343,6 +362,7 @@ class LPLHAgent:
                         and prev_location
                         and self.kg_map.current_location
                         and self.kg_map.current_location != prev_location
+                        and source_navigation_writes_allowed
                         and not done
                         and movement_direction):
                     split_key = (
@@ -378,6 +398,7 @@ class LPLHAgent:
                         and prev_location
                         and self.kg_map.current_location
                         and self.kg_map.current_location != prev_location
+                        and source_navigation_writes_allowed
                         and not done
                         and not movement_direction):
                     kg_location_resolution["confirmed_transition_type"] = "action_candidate"
@@ -452,6 +473,9 @@ class LPLHAgent:
         else:
             action_transition_result = self._apply_gate_action_transition(
                 auxiliary_gate=auxiliary_gate,
+                use_legacy_location_pipeline=bool(
+                    kg_location_resolution.get("use_legacy_location_pipeline")
+                ),
             )
         record_timing("kg_action_transition_gate", timer)
         detail["modules"]["kg_action_transition"] = action_transition_result
@@ -700,22 +724,22 @@ class LPLHAgent:
                         "score_change": reward_change,
                         "current_score": score,
                         "location": score_location,
+                        "location_issued": score_location,
                         "location_fingerprint": score_location_fingerprint,
+                        "location_registry_id": self.kg_map.registry_id_for(
+                            score_location
+                        ),
                         "action": completed_action,
                         "terminal": done,
                         "terminal_status": terminal_status,
                     }
                     if is_death and goal_hazard:
-                        score_summary_skipped.update({
-                            "location": goal_hazard["hazard_location"],
-                            "location_after": goal_hazard["hazard_location"],
-                            "location_fingerprint": goal_hazard["hazard_fingerprint"],
-                            "location_registry_id": goal_hazard.get(
-                                "hazard_registry_id", ""
-                            ),
-                            "death_room_title": grounded_death_room,
-                            "death_room_grounding": death_room_grounding,
-                        })
+                        score_summary_skipped = self._attach_death_hazard_metadata(
+                            score_summary_skipped,
+                            goal_hazard=goal_hazard,
+                            grounded_death_room=grounded_death_room,
+                            death_room_grounding=death_room_grounding,
+                        )
                     self.experience_lib.record_event(
                         event_key,
                         metadata=score_summary_skipped,
@@ -773,16 +797,12 @@ class LPLHAgent:
                         "is_death": is_death,
                     }
                     if is_death and goal_hazard:
-                        score_metadata.update({
-                            "location": goal_hazard["hazard_location"],
-                            "location_after": goal_hazard["hazard_location"],
-                            "location_fingerprint": goal_hazard["hazard_fingerprint"],
-                            "location_registry_id": goal_hazard.get(
-                                "hazard_registry_id", ""
-                            ),
-                            "death_room_title": grounded_death_room,
-                            "death_room_grounding": death_room_grounding,
-                        })
+                        score_metadata = self._attach_death_hazard_metadata(
+                            score_metadata,
+                            goal_hazard=goal_hazard,
+                            grounded_death_room=grounded_death_room,
+                            death_room_grounding=death_room_grounding,
+                        )
                     if reward_change > 0 and not is_death:
                         score_metadata["summary_validation"] = validation
                     if event_key:
@@ -1114,7 +1134,10 @@ class LPLHAgent:
                 previous_location=prev_location,
                 current_location=self.kg_map.current_location,
             )
-        elif (not is_death) and action_valid is False and completed_direction:
+        elif (not is_death
+              and source_navigation_writes_allowed
+              and action_valid is False
+              and completed_direction):
             failure_location = source_location_for_attempt
             self.kg_map.mark_direction_tried_at(
                 completed_direction,
@@ -1493,6 +1516,12 @@ class LPLHAgent:
             logger.warning(f"Initial KG-map extraction failed: {e}")
             print(f"  Initial KG seed skipped: {e}", flush=True)
 
+    @staticmethod
+    def _source_navigation_writes_allowed(
+            was_location_uncertain_at_step_start: bool) -> bool:
+        """A stale pre-darkness room cannot ground exits or blocked moves."""
+        return not bool(was_location_uncertain_at_step_start)
+
     def _resolve_step_location(self, auxiliary_gate: dict, action: str,
                                observation: str, look_probe_text: str,
                                previous_location: str, done: bool) -> dict:
@@ -1594,7 +1623,9 @@ class LPLHAgent:
         result["location_after_update"] = resolved
         result["registry_id"] = self.kg_map.registry_id_for(resolved)
         candidate = (auxiliary_gate or {}).get("action_transition_candidate", {})
-        if isinstance(candidate, dict) and previous_location != resolved:
+        if (isinstance(candidate, dict)
+                and candidate
+                and previous_location != resolved):
             candidate["from"] = previous_location
             candidate["to"] = resolved
         return result
@@ -2559,7 +2590,9 @@ class LPLHAgent:
             result["finish_reason"] = self.llm.last_world_state_extraction_finish_reason or ""
         return result
 
-    def _apply_gate_action_transition(self, auxiliary_gate: dict) -> dict:
+    def _apply_gate_action_transition(
+            self, auxiliary_gate: dict,
+            use_legacy_location_pipeline: bool = False) -> dict:
         """Record a non-cardinal action transition only if the aux gate approves."""
         decision = (auxiliary_gate or {}).get("decision", {})
         transition_decision = decision.get("kg_action_transition", {})
@@ -2583,14 +2616,15 @@ class LPLHAgent:
             action=candidate.get("command", ""),
             to_location=candidate.get("to", ""),
         )
-        # If KG failed to apply a clear room-title arrival before the aux gate
-        # reviewed it, the approved action transition is also authoritative for
-        # current location. This repairs commands such as "go through window"
-        # whose observation starts with the destination room title.
-        self.kg_map.update(
-            [("You", "in", candidate.get("to", ""))],
-            candidate.get("command", ""),
-        )
+        # In legacy fallback mode, preserve the baseline's gate-approved
+        # location repair. In the LLM-centered path the grounded location
+        # verdict and arrival resolver remain the sole cursor authority.
+        if (use_legacy_location_pipeline
+                or not config.AUX_GATE_LOCATION_VERDICT):
+            self.kg_map._legacy_update(
+                [("You", "in", candidate.get("to", ""))],
+                candidate.get("command", ""),
+            )
         result["applied"] = True
         result["status"] = "applied"
         return result
@@ -4168,6 +4202,27 @@ class LPLHAgent:
             "raw_title": raw,
             "canonical_title": canonical,
         }
+
+    def _attach_death_hazard_metadata(self, metadata: dict,
+                                      goal_hazard: dict,
+                                      grounded_death_room: str,
+                                      death_room_grounding: dict) -> dict:
+        """Add hazard identity without replacing the warning's issuing room.
+
+        Retrieval must match a movement-death warning where the fatal command
+        is issued. The destination remains available separately for event
+        identity, rendering, and preparation-goal logic.
+        """
+        result = dict(metadata or {})
+        result.update({
+            "location_after": goal_hazard.get("hazard_location", ""),
+            "hazard_location": goal_hazard.get("hazard_location", ""),
+            "hazard_fingerprint": goal_hazard.get("hazard_fingerprint", ""),
+            "hazard_registry_id": goal_hazard.get("hazard_registry_id", ""),
+            "death_room_title": grounded_death_room,
+            "death_room_grounding": death_room_grounding,
+        })
+        return result
 
     def _goal_hazard_context(self, action: str, action_valid,
                              location_issued: str,
