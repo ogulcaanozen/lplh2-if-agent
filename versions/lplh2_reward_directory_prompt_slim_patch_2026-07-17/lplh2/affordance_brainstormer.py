@@ -137,7 +137,8 @@ class AffordanceBrainstormer:
                                state_signature: dict[str, Any] | None,
                                failed_commands: list[str] | None = None,
                                attempt_counts: dict[str, dict[str, Any]] | None = None,
-                               active_situation_present: bool = False) -> list[dict[str, Any]]:
+                               active_situation_present: bool = False,
+                               active_condition_present: bool = False) -> list[dict[str, Any]]:
         """Return cached affordance ideas that still apply at this location."""
         location_key = self._normalize(location)
         state_key = self._state_key(state_signature)
@@ -145,6 +146,11 @@ class AffordanceBrainstormer:
         if not cached:
             return []
         ideas = self._copy_ideas(cached.get("ideas", []))
+        if self._cache_location_key and self._cache_location_key != location_key:
+            ideas = self._drop_generic_condition_carryover(
+                ideas,
+                allow_condition=active_condition_present,
+            )
         if cached.get("state_key") != state_key:
             ideas = self._ideas_still_relevant(
                 ideas,
@@ -194,7 +200,8 @@ class AffordanceBrainstormer:
                              state_signature: dict[str, Any] | None = None,
                              reset_cache: bool = False,
                              attempt_counts: dict[str, dict[str, Any]] | None = None,
-                             active_situation_present: bool = False) -> dict[str, Any]:
+                             active_situation_present: bool = False,
+                             active_condition_present: bool = False) -> dict[str, Any]:
         """Merge fresh LLM ideas with still-relevant ideas from this location.
 
         Exact-state ideas carry over directly. If the compact state changed, keep
@@ -221,6 +228,11 @@ class AffordanceBrainstormer:
             )
         else:
             carried_before = []
+        if self._cache_location_key and self._cache_location_key != location_key:
+            carried_before = self._drop_generic_condition_carryover(
+                carried_before,
+                allow_condition=active_condition_present,
+            )
 
         merged = self._merge_ideas(self._copy_ideas(fresh_ideas) + carried_before)
         filtered = self.filter_failed_commands(merged, failed_commands)
@@ -297,7 +309,7 @@ class AffordanceBrainstormer:
                 ):
                     continue
                 ledger = self._ledger_for_equivalent(command, attempt_counts)
-                if self._ledger_command_completed(ledger):
+                if int(ledger.get("count", 0) or 0) > 0:
                     done_entry = {
                         "command": command,
                         "last_outcome": ledger.get("last_outcome", ""),
@@ -315,6 +327,39 @@ class AffordanceBrainstormer:
                 cleaned["already_done"] = already_done
             output.append(cleaned)
         return output[:5]
+
+    def _drop_generic_condition_carryover(
+        self,
+        ideas: list[dict[str, Any]],
+        allow_condition: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Discard generic condition probes after moving to another room."""
+        if allow_condition:
+            return self._copy_ideas(ideas)
+        generic_commands = {
+            "listen",
+            "wait",
+            "rest",
+            "concentrate",
+            "look around",
+            "make noise",
+        }
+        output = []
+        for idea in self._copy_ideas(ideas):
+            commands = []
+            for command in self._clean_commands(idea.get("commands_to_try")):
+                command_key = self._command_key(command)
+                if any(
+                    command_key == generic
+                    or command_key.startswith(f"{generic} ")
+                    for generic in generic_commands
+                ):
+                    continue
+                commands.append(command)
+            if commands:
+                idea["commands_to_try"] = commands
+                output.append(idea)
+        return output
 
     def filter_failed_commands(self, ideas: list[dict[str, Any]],
                                failed_commands: list[str]) -> list[dict[str, Any]]:

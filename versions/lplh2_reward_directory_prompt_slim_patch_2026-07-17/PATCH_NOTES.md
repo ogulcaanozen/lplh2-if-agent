@@ -1,5 +1,22 @@
 # LPLH2 Reward Directory and Prompt Slimming Patch
 
+## Post-review corrections
+
+- Re-earning a known reward now refreshes its observed route even when the
+  episodic score summary is skipped as a duplicate. Only a strictly shorter
+  route replaces the stored route.
+- Reward routes stop at the room where the scoring command is issued. The
+  scoring movement itself remains a separate exact command in the directory.
+- Generic condition probes from an old per-location agenda are removed after
+  changing rooms unless a condition-kind situation is explicitly active there.
+- Any command already attempted in the room is consumed from the pending
+  affordance agenda and rendered as completed, preserving the earlier
+  loop-resistance behavior.
+- Retrieval lesson deduplication no longer merges achievement, enabler, or
+  death-warning events.
+- The affordance log now records the consolidated `tried_here` context.
+- Regression coverage increased from 89 to 94 tests.
+
 ## 2026-07-17: persistent reward targets and compact decision context
 
 Created from

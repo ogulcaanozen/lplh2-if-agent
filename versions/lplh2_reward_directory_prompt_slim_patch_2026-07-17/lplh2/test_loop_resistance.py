@@ -85,6 +85,65 @@ class LoopResistanceTests(unittest.TestCase):
             idea.get("preparation_for") for idea in merge["merged_ideas"]
         ))
 
+    def test_attempted_unproductive_command_is_consumed_from_agenda(self):
+        brainstormer = AffordanceBrainstormer()
+        agenda = brainstormer.build_agenda(
+            [{
+                "location": "Room",
+                "situation": "cabinet is visible",
+                "commands_to_try": ["search cabinet"],
+            }],
+            attempt_counts={
+                "search cabinet": {
+                    "command": "search cabinet",
+                    "count": 1,
+                    "last_outcome": "nothing useful",
+                    "outcomes": {"unproductive": 1},
+                },
+            },
+        )
+        self.assertEqual(agenda, [])
+
+    def test_generic_condition_carryover_expires_after_room_change(self):
+        brainstormer = AffordanceBrainstormer()
+        chamber_state = brainstormer.state_signature(
+            "Chamber", ["door"], [], 0, "A humming chamber."
+        )
+        ideas = [{
+            "location": "Chamber",
+            "kind": "condition",
+            "situation": "commands sound distorted",
+            "commands_to_try": ["listen", "wait", "open door"],
+        }]
+        brainstormer.merge_with_carryover(
+            "Chamber", ideas, [], chamber_state,
+        )
+        hall_state = brainstormer.state_signature(
+            "Hall", [], [], 0, "A quiet hall."
+        )
+        brainstormer.merge_with_carryover(
+            "Hall", [], [], hall_state,
+        )
+
+        cleaned = brainstormer.cached_ideas_for_state(
+            "Chamber",
+            chamber_state,
+            active_condition_present=False,
+        )
+        self.assertEqual(
+            brainstormer.pending_commands(cleaned),
+            ["open door"],
+        )
+        preserved = brainstormer.cached_ideas_for_state(
+            "Chamber",
+            chamber_state,
+            active_condition_present=True,
+        )
+        self.assertEqual(
+            brainstormer.pending_commands(preserved),
+            ["listen", "wait", "open door"],
+        )
+
     def test_uncertain_situation_is_grounded_to_entry_gateway(self):
         agent = LPLHAgent.__new__(LPLHAgent)
         agent.kg_map = KGMap(strict_location_authority=True)

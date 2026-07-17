@@ -16,7 +16,8 @@ versions/lplh2_memory_grounding_visitcount_patch_2026-07-16
 
 ## Included
 
-- Persistent scoring-opportunity directory with grounded setup and route hints.
+- Persistent scoring-opportunity directory with grounded setup and route hints
+  that can improve when a shorter route is observed in a later epoch.
 - Current-epoch earned status using the existing score-event set.
 - Cross-epoch object interaction statistics and advisory futility notes.
 - Consolidated `TRIED HERE` context for action selection and brainstorming.

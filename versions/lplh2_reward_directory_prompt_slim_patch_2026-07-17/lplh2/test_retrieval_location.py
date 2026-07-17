@@ -164,6 +164,56 @@ class RetrievalLocationTests(unittest.TestCase):
             "local route"
         ])
 
+    def test_retrieval_dedup_keeps_distinct_death_events(self):
+        agent = self._agent("The Troll Room", "troll room")
+        shared_prefix = (
+            '{"location":"The Troll Room","death_location":"The Troll Room",'
+        )
+        first = self._record(
+            "death_warning",
+            "The Troll Room",
+            self._fingerprint(agent),
+            event_key="death:attack",
+            epoch=1,
+            step=20,
+            text=shared_prefix + '"fatal_action":"attack troll"}',
+        )
+        second = self._record(
+            "death_warning",
+            "The Troll Room",
+            self._fingerprint(agent),
+            event_key="death:wait",
+            epoch=2,
+            step=30,
+            text=shared_prefix + '"fatal_action":"wait"}',
+        )
+        merged = agent._merge_experience_records([first, second])
+        self.assertEqual(len(merged), 2)
+
+    def test_retrieval_dedup_still_collapses_duplicate_route_lessons(self):
+        agent = self._agent("Forest", "forest")
+        first = self._record(
+            "route",
+            "Forest",
+            self._fingerprint(agent),
+            event_key="route:old",
+            epoch=1,
+            step=4,
+            text='{"reusable_lesson":"north reaches the clearing"}',
+        )
+        second = self._record(
+            "route",
+            "Forest",
+            self._fingerprint(agent),
+            event_key="route:new",
+            epoch=2,
+            step=8,
+            text='{"reusable_lesson":"north reaches the clearing"}',
+        )
+        merged = agent._merge_experience_records([first, second])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["metadata"]["event_key"], "route:new")
+
 
 if __name__ == "__main__":
     unittest.main()

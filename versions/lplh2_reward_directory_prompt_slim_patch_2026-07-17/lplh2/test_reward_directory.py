@@ -119,6 +119,47 @@ class RewardDirectoryTests(unittest.TestCase):
         rendered = directory.render(set())
         self.assertIn("Behind House (setup: open window)", rendered)
 
+    def test_reearning_refreshes_only_to_a_shorter_route(self):
+        agent = LPLHAgent.__new__(LPLHAgent)
+        agent.reward_directory = RewardDirectory()
+        agent.current_epoch = 1
+        agent._epoch_path = [
+            ("Start", "north", "Forest"),
+            ("Forest", "east", "Kitchen"),
+            ("Kitchen", "west", "Living Room"),
+        ]
+        agent._record_reward_directory_event(
+            event_key="reward:cellar",
+            points=25,
+            location="Living Room",
+            scoring_command="down",
+            setup_commands=["move rug", "open trap door"],
+        )
+        first = agent.reward_directory.entries()[0]
+        self.assertTrue(first["route_hint"].endswith("Living Room"))
+        self.assertNotIn("Cellar", first["route_hint"])
+
+        agent.current_epoch = 2
+        agent._epoch_path = [
+            ("Start", "west", "Living Room"),
+        ]
+        agent._record_reward_directory_event(
+            event_key="reward:cellar",
+            points=25,
+            location="Living Room",
+            scoring_command="down",
+            setup_commands=[],
+        )
+        refreshed = agent.reward_directory.entries()[0]
+        self.assertEqual(
+            refreshed["route_hint"],
+            "Start: Start: west -> Living Room",
+        )
+        self.assertEqual(
+            refreshed["setup_commands"],
+            ["move rug", "open trap door"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

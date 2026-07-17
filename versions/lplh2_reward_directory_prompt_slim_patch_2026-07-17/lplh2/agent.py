@@ -868,29 +868,6 @@ class LPLHAgent:
                                 "status": "stored",
                             },
                         )
-                    if reward_change > 0 and score_event_key:
-                        route_path = list(self._epoch_path)
-                        if (
-                            prev_location
-                            and location_after
-                            and normalize_location_key(prev_location)
-                            != normalize_location_key(location_after)
-                        ):
-                            route_path.append(
-                                (prev_location, completed_action, location_after)
-                            )
-                        route_hint = render_route_hint(
-                            compress_epoch_path(route_path)
-                        )
-                        self.reward_directory.add_or_update({
-                            "event_key": score_event_key,
-                            "points": int(reward_change),
-                            "location": score_location,
-                            "scoring_command": completed_action,
-                            "setup_commands": setup_commands,
-                            "route_hint": route_hint,
-                            "first_seen_epoch": int(self.current_epoch),
-                        })
                     summary_log_entries.append({
                         "state_type": (
                             "score_loss" if is_death and reward_change < 0
@@ -904,6 +881,15 @@ class LPLHAgent:
                         "metadata": score_metadata,
                     })
                     logger.info(f"Experience stored: score change {reward_change:+d}")
+
+                if reward_change > 0 and score_event_key:
+                    self._record_reward_directory_event(
+                        event_key=score_event_key,
+                        points=reward_change,
+                        location=score_location,
+                        scoring_command=completed_action,
+                        setup_commands=setup_commands,
+                    )
 
                 if is_death:
                     goal_hazard = goal_hazard or self._goal_hazard_context(
@@ -2383,6 +2369,10 @@ class LPLHAgent:
         if gate_decision is not None and "run" in gate_decision:
             should_run = self._coerce_gate_bool(gate_decision.get("run"), True)
 
+        active_condition_present = self._has_active_condition_situation(
+            stored_situations,
+            result["location"],
+        )
         cached_ideas = []
         if reset_cache:
             self.affordance_brainstormer.merge_with_carryover(
@@ -2393,6 +2383,7 @@ class LPLHAgent:
                 reset_cache=True,
                 attempt_counts=attempt_counts_here,
                 active_situation_present=bool(stored_situations),
+                active_condition_present=active_condition_present,
             )
         else:
             cached_ideas = self.affordance_brainstormer.cached_ideas_for_state(
@@ -2401,6 +2392,7 @@ class LPLHAgent:
                 failed_commands=filtered_commands,
                 attempt_counts=attempt_counts_here,
                 active_situation_present=bool(stored_situations),
+                active_condition_present=active_condition_present,
             )
         result["cached_ideas_available"] = len(cached_ideas)
         result["pending_carryover_commands"] = (
@@ -2470,6 +2462,7 @@ class LPLHAgent:
                 reset_cache=reset_cache,
                 attempt_counts=attempt_counts_here,
                 active_situation_present=bool(stored_situations),
+                active_condition_present=active_condition_present,
             )
             result["fresh_ideas"] = merge["fresh_ideas"]
             result["carried_ideas_before"] = merge["carried_ideas_before"]
@@ -2552,6 +2545,9 @@ class LPLHAgent:
             recent_failed_commands=[],
             known_failed_commands_here=problem_attempts_here,
         )
+        active_situations_for_affordance = (
+            self.situation_memory.active_situations()
+        )
         cached_affordance_ideas = self.affordance_brainstormer.cached_ideas_for_state(
             location=location,
             state_signature=affordance_signature,
@@ -2561,8 +2557,10 @@ class LPLHAgent:
                 + list(same_state_tried_commands or [])
             ),
             attempt_counts=self.attempt_ledger.counts_for_location(location),
-            active_situation_present=bool(
-                self.situation_memory.active_situations()
+            active_situation_present=bool(active_situations_for_affordance),
+            active_condition_present=self._has_active_condition_situation(
+                active_situations_for_affordance,
+                location,
             ),
         )
         prev_lower = str(action or "").lower().strip()
@@ -3778,6 +3776,28 @@ class LPLHAgent:
             seen.add(key)
         return output
 
+    def _record_reward_directory_event(
+        self,
+        event_key: str,
+        points: int,
+        location: str,
+        scoring_command: str,
+        setup_commands: list[str] | None = None,
+    ) -> dict:
+        """Refresh a grounded reward entry whenever the score is earned."""
+        route_hint = render_route_hint(
+            compress_epoch_path(list(self._epoch_path))
+        )
+        return self.reward_directory.add_or_update({
+            "event_key": event_key,
+            "points": int(points or 0),
+            "location": location,
+            "scoring_command": scoring_command,
+            "setup_commands": list(setup_commands or []),
+            "route_hint": route_hint,
+            "first_seen_epoch": int(self.current_epoch),
+        })
+
     def _experience_lesson_signature(self, record: dict) -> str:
         text = str(record.get("text", "") or "")
         lesson = ""
@@ -3953,7 +3973,16 @@ class LPLHAgent:
             kind = str(
                 metadata.get("kind") or metadata.get("trigger") or "memory"
             )
-            lesson_signature = self._experience_lesson_signature(record)
+            protected_event_kinds = {
+                "achievement",
+                "enabler",
+                "death_warning",
+            }
+            lesson_signature = (
+                ""
+                if kind in protected_event_kinds
+                else self._experience_lesson_signature(record)
+            )
             lesson_key = (
                 location,
                 kind,
@@ -5935,6 +5964,25 @@ class LPLHAgent:
         room_state["blocked_exits"] = enriched
         context["current_room_state"] = room_state
         return json.dumps(context, indent=2, ensure_ascii=False)
+
+    def _has_active_condition_situation(
+        self,
+        situations: list[dict] | None,
+        location: str,
+    ) -> bool:
+        """Return whether a condition-kind situation is active in this room."""
+        location_key = normalize_location_key(location)
+        for situation in situations or []:
+            if str(situation.get("kind") or "").strip().lower() != "condition":
+                continue
+            situation_location = (
+                situation.get("location")
+                or situation.get("hazard_location")
+                or ""
+            )
+            if normalize_location_key(situation_location) == location_key:
+                return True
+        return False
 
     def _active_goal_locations(self) -> list[str]:
         locations = []

@@ -109,7 +109,8 @@ class PromptSlimTests(unittest.TestCase):
         )
         rendered = brainstormer.format_agenda_for_prompt(agenda)
         self.assertNotIn("already_tried_here", rendered)
-        self.assertIn("open door: tried x2", rendered)
+        self.assertIn('"command": "open door"', rendered)
+        self.assertIn('"pending_commands": ["unlock door"]', rendered)
         self.assertNotIn('"tried_count": 0', rendered)
 
     def test_kg_context_has_compact_frontier_and_no_local_relations(self):
