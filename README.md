@@ -11,12 +11,14 @@ Chroma databases, run logs, Drive data, API keys, or LoRA adapter weights.
 The current thesis/testing baseline is:
 
 ```text
-versions/lplh2_goal_situation_roomlevel_patch_2026-07-12
+versions/lplh2_room_identity_familiarity_patch_2026-07-18
 ```
 
 See `MAIN_VERSION.md` for the authoritative designation and included patch
-level. The root Colab notebook can temporarily select a newer experimental
-snapshot without changing the main-version designation.
+level. This version was promoted after the completed 10-epoch Detective
+experiment `detective_20260719_084125`, which reached a maximum raw score of
+210 and averaged 180 over its final three epochs. The root Colab notebook is
+pinned to this main snapshot.
 
 ## Contents
 

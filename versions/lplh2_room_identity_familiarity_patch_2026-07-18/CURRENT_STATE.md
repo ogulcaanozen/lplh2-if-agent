@@ -1,12 +1,18 @@
 # Current State
 
-Last updated: 2026-07-18
+Last updated: 2026-07-26
 
 This folder is the room-identity and familiarity version:
 
 ```text
 versions/lplh2_room_identity_familiarity_patch_2026-07-18
 ```
+
+**Status: current main LPLH2 thesis/testing baseline.**
+
+The version was promoted after the completed 10-epoch Detective experiment
+`detective_20260719_084125`, which reached a maximum raw score of `210` and
+averaged `180` over its final three epochs.
 
 It is built on:
 
@@ -117,9 +123,9 @@ versions/lplh2_reward_directory_prompt_slim_patch_2026-07-17
 ## Runtime Defaults
 
 The root convenience notebook and this version's notebook point to this folder.
-The current notebook is configured for the Zork1 experiment with:
+The current notebook is configured for the Detective experiment with:
 
-- `3` epochs,
+- `10` epochs,
 - `250` max steps per epoch,
 - main LLM `Qwen/Qwen2.5-14B-Instruct`,
 - auxiliary modules through local LLM fallback unless OpenAI model env vars are

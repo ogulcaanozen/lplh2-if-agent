@@ -1,6 +1,6 @@
 # Current Main LPLH2 Version
 
-Current main version as of 2026-07-18:
+Current main version as of 2026-07-26:
 
 ```text
 versions/lplh2_room_identity_familiarity_patch_2026-07-18
@@ -8,6 +8,20 @@ versions/lplh2_room_identity_familiarity_patch_2026-07-18
 
 This is the current thesis/testing baseline. Older folders under `versions/`
 remain preserved as historical snapshots.
+
+## Validation
+
+This designation was confirmed after the completed 10-epoch Detective
+experiment `detective_20260719_084125`.
+
+- Per-epoch raw scores: `30, 30, 80, 90, 110, 180, 210, 190, 180, 170`
+- Maximum raw score: `210`
+- Average of the final three epochs: `180`
+
+The run demonstrated strong cross-epoch reward reuse and broader exploration.
+Known limitations remain documented rather than hidden: same-title KG identity
+was imperfect, familiarity did not reach `EXHAUSTED` during the run, and some
+advisory memories were still ignored or hallucinated by the LLM.
 
 The main-version designation includes:
 
