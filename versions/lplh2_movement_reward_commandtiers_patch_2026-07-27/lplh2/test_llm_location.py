@@ -85,6 +85,34 @@ class LLMTextLocationTests(unittest.TestCase):
         )
         self.assertEqual(len(agent.kg_map.room_candidates("Hallway")), 1)
 
+    def test_score_gain_override_still_allows_same_title_chain_split(self):
+        agent = self._agent([
+            _resolver_response("existing", "Hallway"),
+        ])
+        start = self._seed(
+            agent, "Hallway", "Hallway\nA red-carpeted corridor."
+        )
+        result = agent._resolve_step_location(
+            self._gate("no", "Hallway"),
+            "west",
+            "Hallway\nA tiled corridor bends south.",
+            "",
+            start,
+            False,
+            reward_change=10,
+        )
+        self.assertEqual(
+            result["movement_override"]["trigger"],
+            "score_gain",
+        )
+        self.assertEqual(
+            result["resolver_decision"],
+            "new_same_title_chain",
+        )
+        self.assertEqual(agent.kg_map.current_location, "Hallway #2")
+        self.assertNotIn("same_title_chain_skipped", result)
+        self.assertEqual(len(agent.kg_map.room_candidates("Hallway")), 2)
+
     def test_titleless_signature_change_does_not_override_gate_no_move(self):
         agent = self._agent()
         start = self._seed(

@@ -7,12 +7,12 @@ COVERED, and EXHAUSTED attempts, recognizes reversible observations as
 non-progress, and explicitly rejects unchanged two-command loops.
 
 Movement overrides now require a grounded title before an arrival-signature
-change can trigger them, and the override state is passed into room identity
-resolution so it cannot activate same-title chain splitting. Same-title
-direction chains now consult the LLM resolver first. A sibling is minted only
-when the resolver would identify the destination as the room just left and no
-confirmed self-loop explains that result. This preserves portable-object
-reasoning and signature alias learning.
+change can trigger them. Signature-only overrides suppress same-title chain
+splitting, while stronger score-gain evidence remains eligible for a split.
+Same-title direction chains now consult the LLM resolver first. A sibling is
+minted only when the resolver would identify the destination as the room just
+left and no confirmed self-loop explains that result. This preserves
+portable-object reasoning and signature alias learning.
 
 Reward familiarity now uses the directory's alias-aware earned check. The
 action-generation log also records the exact scoring-opportunity context and
@@ -54,7 +54,7 @@ python -m compileall lplh2
 python -m unittest discover -s lplh2 -t . -p "test_*.py"
 ```
 
-Result: 136 tests passed.
+Result: 137 tests passed.
 
 ## Inherited history
 

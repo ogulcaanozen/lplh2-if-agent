@@ -2059,7 +2059,10 @@ class LPLHAgent:
             description=description,
             action=action,
             from_location=previous_location,
-            movement_overridden=bool(movement_override),
+            movement_overridden=(
+                bool(movement_override)
+                and movement_override.get("trigger") != "score_gain"
+            ),
         )
         result.update(resolver_log)
         if not resolved:
@@ -2098,12 +2101,6 @@ class LPLHAgent:
             "candidate_source": "epoch_nodes" if candidates else "registry",
             "signature_alias_added": False,
         }
-        if (
-            movement_overridden
-            and config.SAME_TITLE_CHAIN_SPLIT
-            and self.kg_map._base_location_key(from_location) == base_key
-        ):
-            log["same_title_chain_skipped"] = "movement_override"
         if not config.LLM_LOCATION_RESOLVER:
             return self.kg_map.resolve_arrival_location(
                 title, description, from_location, action
@@ -2262,13 +2259,17 @@ class LPLHAgent:
                 and normalize_location_key(direction_destination)
                 == normalize_location_key(from_location)
             )
-            same_title_chain = (
+            same_title_chain_candidate = (
                 config.SAME_TITLE_CHAIN_SPLIT
-                and not movement_overridden
                 and normalize_location_key(label)
                 == normalize_location_key(from_location)
                 and bool(direction)
                 and not confirmed_self_loop
+            )
+            if same_title_chain_candidate and movement_overridden:
+                log["same_title_chain_skipped"] = "movement_override"
+            same_title_chain = (
+                same_title_chain_candidate and not movement_overridden
             )
             if same_title_chain:
                 mint_counts = getattr(
