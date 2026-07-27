@@ -1,5 +1,23 @@
 # LPLH2 Movement, Reward, and Command-Tier Patch
 
+## 2026-07-27: static-review fixes
+
+The main action prompt again prioritizes untried commands over REOPENED,
+COVERED, and EXHAUSTED attempts, recognizes reversible observations as
+non-progress, and explicitly rejects unchanged two-command loops.
+
+Movement overrides now require a grounded title before an arrival-signature
+change can trigger them, and the override state is passed into room identity
+resolution so it cannot activate same-title chain splitting. Same-title
+direction chains now consult the LLM resolver first. A sibling is minted only
+when the resolver would identify the destination as the room just left and no
+confirmed self-loop explains that result. This preserves portable-object
+reasoning and signature alias learning.
+
+Reward familiarity now uses the directory's alias-aware earned check. The
+action-generation log also records the exact scoring-opportunity context and
+route guidance shown to the main LLM.
+
 ## 2026-07-27: movement identity, reward routing, and retry tiers
 
 Created from
@@ -8,10 +26,10 @@ that validated main baseline.
 
 The location pipeline now overrides an auxiliary no-move verdict only for a
 direction command that was not rejected and produced either positive score or
-a changed grounded arrival signature. A confirmed same-title hop with no known
-signature match mints a bounded sibling before invoking the resolver. Same-room
-state changes also prevent blocked/open edge contradictions from causing false
-identity splits.
+a changed grounded arrival signature. A confirmed same-title directional hop
+can mint a bounded sibling after the resolver identifies the arrival as the
+room just left. Same-room state changes also prevent blocked/open edge
+contradictions from causing false identity splits.
 
 The main prompt gives grounded death warnings precedence over familiarity
 labels. Fatal movement summaries explicitly describe the rule from the room
@@ -36,7 +54,7 @@ python -m compileall lplh2
 python -m unittest discover -s lplh2 -t . -p "test_*.py"
 ```
 
-Result: 129 tests passed.
+Result: 136 tests passed.
 
 ## Inherited history
 

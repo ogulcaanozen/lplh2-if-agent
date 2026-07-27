@@ -40,6 +40,7 @@ class LLMTextLocationTests(unittest.TestCase):
         agent.kg_map = KGMap(strict_location_authority=True)
         agent.llm = _FakeLLM(responses)
         agent.current_epoch = 1
+        agent.step_count = 0
         agent._location_resolver_cache = {}
         agent._contradiction_splits_this_epoch = set()
         agent._same_title_chain_mints_this_epoch = {}
@@ -61,7 +62,9 @@ class LLMTextLocationTests(unittest.TestCase):
         }
 
     def test_direction_signature_change_overrides_gate_no_move(self):
-        agent = self._agent()
+        agent = self._agent([
+            _resolver_response("existing", "Hallway"),
+        ])
         start = self._seed(
             agent, "Hallway", "Hallway\nA red-carpeted corridor."
         )
@@ -75,7 +78,55 @@ class LLMTextLocationTests(unittest.TestCase):
         )
         self.assertEqual(result["movement_override"]["trigger"], "signature_change")
         self.assertEqual(result["gate_location_verdict"]["moved"], "yes")
-        self.assertEqual(agent.kg_map.current_location, "Hallway #2")
+        self.assertEqual(agent.kg_map.current_location, start)
+        self.assertEqual(
+            result["same_title_chain_skipped"],
+            "movement_override",
+        )
+        self.assertEqual(len(agent.kg_map.room_candidates("Hallway")), 1)
+
+    def test_titleless_signature_change_does_not_override_gate_no_move(self):
+        agent = self._agent()
+        start = self._seed(
+            agent, "Hallway", "Hallway\nA red-carpeted corridor."
+        )
+        result = agent._resolve_step_location(
+            self._gate("no", ""),
+            "north",
+            "A tiled corridor bends west.",
+            "",
+            start,
+            False,
+        )
+        self.assertFalse(result["movement_override"])
+        self.assertEqual(result["gate_location_verdict"]["moved"], "no")
+        self.assertEqual(agent.kg_map.current_location, start)
+        self.assertFalse(agent.kg_map.location_uncertain)
+
+    def test_titleless_score_gain_still_marks_destination_uncertain(self):
+        agent = self._agent()
+        start = self._seed(
+            agent, "Hallway", "Hallway\nA red-carpeted corridor."
+        )
+        result = agent._resolve_step_location(
+            self._gate("no", ""),
+            "north",
+            "You gain ten points. It is too dark to see.",
+            "",
+            start,
+            False,
+            reward_change=10,
+        )
+        self.assertEqual(
+            result["movement_override"]["trigger"],
+            "score_gain",
+        )
+        self.assertEqual(
+            result["action_transition_status"],
+            "moved_destination_unseen",
+        )
+        self.assertTrue(agent.kg_map.location_uncertain)
+        self.assertEqual(agent.kg_map.current_location, start)
 
     def test_movement_override_respects_rejection_and_command_shape(self):
         agent = self._agent()
@@ -107,7 +158,9 @@ class LLMTextLocationTests(unittest.TestCase):
         self.assertEqual(agent.kg_map.current_location, start)
 
     def test_same_title_chain_alias_and_mint_cap(self):
-        agent = self._agent()
+        agent = self._agent([
+            _resolver_response("existing", "Hallway"),
+        ])
         first_text = "Hallway\nA red corridor."
         first = self._seed(agent, "Hallway", first_text)
         alias, alias_log = agent._resolve_arrival_identity(
@@ -123,6 +176,10 @@ class LLMTextLocationTests(unittest.TestCase):
         self.assertEqual(
             sibling_log["resolver_decision"], "new_same_title_chain"
         )
+        self.assertEqual(
+            sibling_log["resolver_original_decision"], "existing"
+        )
+        self.assertEqual(agent.llm.calls, 1)
 
         old_cap = config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH
         try:
@@ -136,6 +193,52 @@ class LLMTextLocationTests(unittest.TestCase):
             self.assertIn("same_title_chain_mint_cap_hit", cap_log)
         finally:
             config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH = old_cap
+
+    def test_same_title_portable_object_drift_uses_resolver_alias(self):
+        agent = self._agent([
+            _resolver_response("existing", "Forest"),
+        ])
+        forest = self._seed(
+            agent,
+            "Forest",
+            "Forest\nTall trees surround a narrow path.",
+        )
+        path, _ = agent.kg_map.mint_room(
+            "Path",
+            "Path\nA path through the trees.",
+            epoch=1,
+        )
+        label, log = agent._resolve_arrival_identity(
+            "Forest",
+            "Forest\nTall trees surround a narrow path. A coin lies here.",
+            "north",
+            path,
+        )
+        self.assertEqual(label, forest)
+        self.assertEqual(log["resolver_decision"], "existing")
+        self.assertTrue(log["signature_alias_added"])
+        self.assertEqual(len(agent.kg_map.room_candidates("Forest")), 1)
+
+    def test_confirmed_same_title_self_loop_does_not_mint_sibling(self):
+        agent = self._agent([
+            _resolver_response("existing", "Hallway"),
+        ])
+        hallway = self._seed(
+            agent,
+            "Hallway",
+            "Hallway\nA long corridor.",
+        )
+        agent.kg_map.confirm_direction(hallway, "north", hallway)
+        label, log = agent._resolve_arrival_identity(
+            "Hallway",
+            "Hallway\nA long corridor with a discarded note.",
+            "north",
+            hallway,
+        )
+        self.assertEqual(label, hallway)
+        self.assertEqual(log["resolver_decision"], "existing")
+        self.assertNotIn("same_title_chain_mints_this_epoch", log)
+        self.assertEqual(len(agent.kg_map.room_candidates("Hallway")), 1)
 
     def test_gate_no_move_keeps_room_and_fm_location_is_inert(self):
         agent = self._agent()

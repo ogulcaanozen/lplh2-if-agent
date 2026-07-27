@@ -3,6 +3,7 @@
 import unittest
 
 from .agent import LPLHAgent
+from .kg_map import KGMap
 from .reward_directory import (
     RewardDirectory,
     compress_epoch_path,
@@ -243,6 +244,53 @@ class RewardDirectoryTests(unittest.TestCase):
             "scoring_command": "north",
         })
         self.assertEqual(len(directory), 2)
+
+    def test_unearned_entries_honors_merged_event_key_aliases(self):
+        directory = RewardDirectory()
+        directory.add_or_update({
+            "event_key": "copy-a",
+            "points": 10,
+            "location": "Office",
+            "location_registry_id": "r3",
+            "scoring_command": "take paper",
+        })
+        directory.add_or_update({
+            "event_key": "copy-b",
+            "points": 10,
+            "location": "Office",
+            "location_registry_id": "r3",
+            "scoring_command": "take paper",
+        })
+        self.assertEqual(len(directory), 1)
+        self.assertEqual(
+            [entry["event_key"] for entry in directory.unearned_entries(set())],
+            [directory.entries()[0]["event_key"]],
+        )
+        self.assertEqual(directory.unearned_entries({"copy-b"}), [])
+
+    def test_familiarity_rider_honors_merged_event_key_aliases(self):
+        agent = LPLHAgent.__new__(LPLHAgent)
+        agent.kg_map = KGMap()
+        office, registry_id = agent.kg_map.mint_room(
+            "Office",
+            "Office\nA quiet office.",
+            epoch=1,
+        )
+        agent.kg_map.confirm_arrival(office, "Office\nA quiet office.")
+        agent.reward_directory = RewardDirectory()
+        for event_key in ("copy-a", "copy-b"):
+            agent.reward_directory.add_or_update({
+                "event_key": event_key,
+                "points": 10,
+                "location": office,
+                "location_registry_id": registry_id,
+                "scoring_command": "take paper",
+            })
+        agent.earned_score_event_keys_this_epoch = {"copy-b"}
+
+        familiarity = agent._room_familiarity_by_location()
+
+        self.assertNotIn("rider", familiarity[office])
 
     def test_adaptive_cutoff_keeps_all_nearby_then_three_far(self):
         directory = RewardDirectory()

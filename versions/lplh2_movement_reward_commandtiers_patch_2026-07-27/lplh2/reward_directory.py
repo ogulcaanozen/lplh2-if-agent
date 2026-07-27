@@ -287,6 +287,14 @@ class RewardDirectory:
             )
         ]
 
+    def unearned_entries(self, earned_keys: set | None = None) -> list[dict]:
+        """Return entries whose primary key and merged aliases are all unearned."""
+        earned = {str(value) for value in (earned_keys or set())}
+        return [
+            entry for entry in self.entries()
+            if not self._entry_is_earned(entry, earned)
+        ]
+
     def render(
         self,
         earned_keys: set | None = None,

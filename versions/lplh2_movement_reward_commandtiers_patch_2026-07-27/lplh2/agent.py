@@ -1973,7 +1973,11 @@ class LPLHAgent:
                 signature_changed = arrival_signature not in stored_signatures
             trigger = (
                 "score_gain" if int(reward_change or 0) > 0
-                else ("signature_change" if signature_changed else "")
+                else (
+                    "signature_change"
+                    if (signature_changed and selected_title)
+                    else ""
+                )
             )
             if trigger:
                 movement_override = {
@@ -2055,6 +2059,7 @@ class LPLHAgent:
             description=description,
             action=action,
             from_location=previous_location,
+            movement_overridden=bool(movement_override),
         )
         result.update(resolver_log)
         if not resolved:
@@ -2077,8 +2082,11 @@ class LPLHAgent:
         return result
 
     def _resolve_arrival_identity(self, title: str, description: str,
-                                  action: str, from_location: str) -> tuple[str, dict]:
+                                  action: str, from_location: str,
+                                  movement_overridden: bool = False
+                                  ) -> tuple[str, dict]:
         title = canonical_room_display(title)
+        base_key = self.kg_map._base_location_key(title)
         candidates = self.kg_map.room_candidates(title)
         registry_candidates = self.kg_map.registry_candidates_for_base(title)
         log = {
@@ -2090,6 +2098,12 @@ class LPLHAgent:
             "candidate_source": "epoch_nodes" if candidates else "registry",
             "signature_alias_added": False,
         }
+        if (
+            movement_overridden
+            and config.SAME_TITLE_CHAIN_SPLIT
+            and self.kg_map._base_location_key(from_location) == base_key
+        ):
+            log["same_title_chain_skipped"] = "movement_override"
         if not config.LLM_LOCATION_RESOLVER:
             return self.kg_map.resolve_arrival_location(
                 title, description, from_location, action
@@ -2163,43 +2177,6 @@ class LPLHAgent:
                 "resolver_ambiguity_preference": preference,
                 "registry_id": registry_id,
             }
-        base_key = self.kg_map._base_location_key(title)
-        same_title_chain = (
-            not registry_signature_matches
-            and config.SAME_TITLE_CHAIN_SPLIT
-            and self.kg_map._base_location_key(from_location) == base_key
-        )
-        mint_counts = getattr(
-            self, "_same_title_chain_mints_this_epoch", {}
-        )
-        self._same_title_chain_mints_this_epoch = mint_counts
-        same_title_mints = mint_counts.get(
-            base_key, 0
-        )
-        if (
-            same_title_chain
-            and same_title_mints
-            < config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH
-        ):
-            label, registry_id = self.kg_map.mint_room(
-                title,
-                description,
-                epoch=self.current_epoch,
-            )
-            mint_counts[base_key] = same_title_mints + 1
-            log.update({
-                "resolver_decision": "new_same_title_chain",
-                "resolver_confidence": "high",
-                "registry_id": registry_id,
-                "same_title_chain_mints_this_epoch": same_title_mints + 1,
-            })
-            return label, log
-        if same_title_chain:
-            log["same_title_chain_mint_cap_hit"] = {
-                "base_title": title,
-                "count": same_title_mints,
-                "cap": config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH,
-            }
         if not candidates and not registry_candidates:
             label, _ = self.kg_map.mint_room(
                 title, description, epoch=self.current_epoch
@@ -2270,6 +2247,62 @@ class LPLHAgent:
                 (card for card in cards if card.get("label") == label), {}
             )
             registry_id = matched_card.get("registry_id", "")
+            direction = self._blocked_direction_for_command(action)
+            direction_destination = (
+                (
+                    self.kg_map.nodes.get(from_location, {})
+                    .get("direction", {})
+                    .get(direction, "")
+                )
+                if direction
+                else ""
+            )
+            confirmed_self_loop = bool(
+                direction_destination
+                and normalize_location_key(direction_destination)
+                == normalize_location_key(from_location)
+            )
+            same_title_chain = (
+                config.SAME_TITLE_CHAIN_SPLIT
+                and not movement_overridden
+                and normalize_location_key(label)
+                == normalize_location_key(from_location)
+                and bool(direction)
+                and not confirmed_self_loop
+            )
+            if same_title_chain:
+                mint_counts = getattr(
+                    self, "_same_title_chain_mints_this_epoch", {}
+                )
+                self._same_title_chain_mints_this_epoch = mint_counts
+                same_title_mints = mint_counts.get(base_key, 0)
+                if (
+                    same_title_mints
+                    < config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH
+                ):
+                    original_decision = decision
+                    original_confidence = confidence or "low"
+                    label, registry_id = self.kg_map.mint_room(
+                        title,
+                        description,
+                        epoch=self.current_epoch,
+                    )
+                    mint_counts[base_key] = same_title_mints + 1
+                    log.update({
+                        "resolver_decision": "new_same_title_chain",
+                        "resolver_confidence": "high",
+                        "resolver_original_decision": original_decision,
+                        "resolver_original_confidence": original_confidence,
+                        "registry_id": registry_id,
+                        "same_title_chain_mints_this_epoch":
+                            same_title_mints + 1,
+                    })
+                    return label, log
+                log["same_title_chain_mint_cap_hit"] = {
+                    "base_title": title,
+                    "count": same_title_mints,
+                    "cap": config.SAME_TITLE_CHAIN_MAX_MINTS_PER_EPOCH,
+                }
             if registry_id:
                 label = self.kg_map.adopt_registry_room(
                     registry_id, observation=description
@@ -6863,14 +6896,11 @@ class LPLHAgent:
                 else []
             )
         }
-        unearned = [
-            entry for entry in (
-                self.reward_directory.entries()
-                if hasattr(self, "reward_directory")
-                else []
-            )
-            if entry.get("event_key") not in earned
-        ]
+        unearned = (
+            self.reward_directory.unearned_entries(earned)
+            if hasattr(self, "reward_directory")
+            else []
+        )
         for location in self.kg_map.nodes:
             registry_id = self.kg_map.registry_id_for(location)
             described = self._described_exits_untried(location)

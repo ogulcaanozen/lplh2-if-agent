@@ -1559,6 +1559,16 @@ class GameRunner:
             str(generation.get("affordance_agenda")
                 or generation.get("brainstormed_command_ideas", "[]"))
         )
+        self._action_generation_log_file.write(
+            "\n\nknown scoring opportunities shown:\n"
+        )
+        self._action_generation_log_file.write(
+            str(generation.get("known_rewards_context", "none known yet"))
+        )
+        self._action_generation_log_file.write("\n\nroute guidance shown:\n")
+        self._action_generation_log_file.write(
+            str(generation.get("route_guidance", "none"))
+        )
         self._action_generation_log_file.write("\n\nknown failed commands here:\n")
         self._action_generation_log_file.write(str(generation.get("known_failed_commands_here", "[]")))
         self._action_generation_log_file.write("\n\nproblem attempts from ledger:\n")

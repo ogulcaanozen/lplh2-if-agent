@@ -36,6 +36,18 @@ class PromptRuleTests(unittest.TestCase):
             LPLH_ACTION_GENERATION_PROMPT,
         )
         self.assertIn(
+            "prefer in this order",
+            LPLH_ACTION_GENERATION_PROMPT,
+        )
+        self.assertIn(
+            "Two-command loops",
+            LPLH_ACTION_GENERATION_PROMPT,
+        )
+        self.assertIn(
+            "is not progress",
+            LPLH_ACTION_GENERATION_PROMPT,
+        )
+        self.assertIn(
             "Do not re-propose EXHAUSTED commands",
             AFFORDANCE_BRAINSTORMING_PROMPT,
         )
