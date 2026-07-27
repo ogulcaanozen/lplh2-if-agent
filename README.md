@@ -18,7 +18,9 @@ See `MAIN_VERSION.md` for the authoritative designation and included patch
 level. This version was promoted after the completed 10-epoch Detective
 experiment `detective_20260719_084125`, which reached a maximum raw score of
 210 and averaged 180 over its final three epochs. The root Colab notebook is
-pinned to this main snapshot.
+temporarily pinned to the experimental
+`lplh2_movement_reward_commandtiers_patch_2026-07-27` snapshot; this does not
+change the main-version designation.
 
 ## Contents
 
