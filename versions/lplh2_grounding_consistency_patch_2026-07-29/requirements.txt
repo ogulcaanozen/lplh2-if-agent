@@ -1,0 +1,12 @@
+jericho>=3.2
+ollama>=0.4.0
+openai>=1.40
+chromadb>=0.5
+sentence-transformers>=3.0
+transformers>=4.45
+peft>=0.12
+accelerate>=0.33
+torchao>=0.16
+numpy
+opentelemetry-api>=1.40.0
+opentelemetry-sdk>=1.40.0
