@@ -7166,13 +7166,10 @@ class LPLHAgent:
                 normalize_command_key(revised_command)
                 == normalize_command_key(command)
             )
+            command = revised_command
+            raw_llm_response = revision_raw
+            repeat_check = self._parse_repeat_check(revision_raw)
             debug["final_command"] = revised_command
-            return (
-                revised_command,
-                revision_raw,
-                self._parse_repeat_check(revision_raw),
-                debug,
-            )
 
         direction = self._blocked_direction_for_command(command)
         if not direction:

@@ -1,5 +1,13 @@
 # LPLH2 Grounding Consistency Patch
 
+## 2026-07-29: F1 navigation enforcement follow-up
+
+After a grounding-consistency revision, the revised command now continues
+through the existing visit-scoped blocked-direction guard. A replacement
+direction therefore cannot bypass confirmed rejection evidence. The grounding
+revision still runs only once; the navigation guard may separately adjudicate
+the revised direction when its own evidence requires it.
+
 ## 2026-07-29: grounding, preparation, and repetition fixes
 
 Created from
@@ -35,7 +43,7 @@ python -m compileall -q lplh2
 python -m unittest discover -s lplh2 -t . -p "test_*.py"
 ```
 
-Result: 154 tests passed.
+Result: 155 tests passed.
 
 ## 2026-07-27: static-review fixes
 

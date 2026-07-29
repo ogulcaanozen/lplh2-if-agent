@@ -39,6 +39,25 @@ class _RevisionLLM:
         )
 
 
+class _SequenceRevisionLLM:
+    def __init__(self, commands):
+        self.commands = list(commands)
+        self.calls = []
+
+    def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.commands:
+            raise AssertionError("Unexpected additional revision call")
+        command = self.commands.pop(0)
+        return (
+            "|start|\n"
+            f"<com>{command}</com>\n"
+            '<repeat>{"is_repeat": false, "reason": "grounded alternative"}</repeat>\n'
+            "<rea>Use grounded current evidence.</rea>\n"
+            "|end|"
+        )
+
+
 class GroundingConsistencyTests(unittest.TestCase):
     def _inventory_agent(self, inventory, update):
         agent = LPLHAgent.__new__(LPLHAgent)
@@ -257,6 +276,41 @@ class GroundingConsistencyTests(unittest.TestCase):
         self.assertEqual(command, "climb tree")
         self.assertTrue(debug["revision_insisted"])
         self.assertEqual(len(agent.llm.calls), 1)
+
+    def test_grounding_revision_rechecks_revised_blocked_direction(self):
+        agent = LPLHAgent.__new__(LPLHAgent)
+        agent.kg_map = KGMap()
+        agent.kg_map.update([("You", "in", "Forest Path")], "look")
+        agent.situation_memory = SituationMemory()
+        agent.llm = _SequenceRevisionLLM(["north", "south"])
+        agent.step_count = 20
+        agent._visit_direction_failures = {}
+        agent._record_visit_direction_failure(
+            "Forest Path",
+            "north",
+            "You can't go that way.",
+            step=19,
+        )
+
+        command, _, _, debug = agent._apply_navigation_enforcement(
+            command="climb tree",
+            raw_llm_response="original",
+            repeat_check={},
+            prompt="action prompt",
+            observation="A large tree is here.",
+            affordance_agenda=[],
+            tried_here=(
+                "climb tree [EXHAUSTED] x12, \"no lasting change\"\n"
+                "Any command not listed here has never been tried in this room."
+            ),
+        )
+
+        self.assertEqual(command, "south")
+        self.assertEqual(debug["revision_trigger"], "grounding_consistency")
+        self.assertEqual(debug["revision_final_command"], "north")
+        self.assertEqual(debug["direction"], "north")
+        self.assertEqual(debug["layer"], 2)
+        self.assertEqual(len(agent.llm.calls), 2)
 
     def test_reward_rider_exempts_exhausted_destination_from_revision(self):
         agent = LPLHAgent.__new__(LPLHAgent)
