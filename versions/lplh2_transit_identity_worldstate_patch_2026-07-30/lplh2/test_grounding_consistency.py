@@ -7,6 +7,7 @@ from .agent import LPLHAgent
 from .attempt_ledger import AttemptLedger
 from .familiarity import RoomFamiliarity
 from .kg_map import KGMap
+from .llm_client import LLMClient
 from .opportunity_module import SituationMemory
 from .reward_directory import RewardDirectory
 
@@ -544,6 +545,51 @@ class GroundingConsistencyTests(unittest.TestCase):
             result["uncertain_location_grounding"][
                 "synthetic_location_persisted"
             ]
+        )
+
+    def test_inventory_and_situation_resolution_prompt_call_paths_format(self):
+        client = LLMClient.__new__(LLMClient)
+        client._es_client = None
+        client._chat_aux_fallback = (
+            lambda prompt, max_new_tokens: "|start| [] |end|"
+        )
+
+        inventory_response = client.reconcile_inventory(
+            location="Kitchen",
+            action="take lantern",
+            action_valid=True,
+            command_outcome={"status": "accepted"},
+            observation="Taken.",
+            inventory_before=[],
+            inventory=["lantern"],
+            visible_objects=["table"],
+        )
+        self.assertEqual(inventory_response, "[]")
+        self.assertIn(
+            "Current Location: Kitchen",
+            client.last_inventory_reconciliation_prompt,
+        )
+
+        resolution_response = client.resolve_stored_situations(
+            location="Attic",
+            previous_location="Kitchen",
+            action="up",
+            observation="Attic\nThe room is now safely lit.",
+            inventory=["lantern"],
+            score=10,
+            reward_change=0,
+            active_situations=[{
+                "location": "Kitchen",
+                "situation": (
+                    "dark area encountered after 'up' from Kitchen; "
+                    "destination not yet identified"
+                ),
+            }],
+        )
+        self.assertEqual(resolution_response, "[]")
+        self.assertIn(
+            "Previous Location: Kitchen",
+            client.last_situation_resolution_prompt,
         )
 
 

@@ -482,6 +482,7 @@ class LLMClient:
         """Decide which active stored situations are directly solved now."""
         prompt = STORED_SITUATION_RESOLUTION_PROMPT.format(
             location=location or "unknown",
+            previous_location=previous_location or "unknown",
             action=action or "none",
             observation=observation or "",
             inventory=json.dumps(inventory or [], ensure_ascii=False),
@@ -739,7 +740,6 @@ class LLMClient:
         """Semantically reconcile carried inventory for the latest step."""
         prompt = INVENTORY_RECONCILIATION_PROMPT.format(
             location=location or "unknown",
-            previous_location=previous_location or "unknown",
             action=action or "none",
             action_valid=str(action_valid),
             command_outcome=json.dumps(command_outcome or {}, ensure_ascii=False),

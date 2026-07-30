@@ -1,5 +1,23 @@
 # LPLH2 Grounding Consistency Patch
 
+## 2026-07-30: static-review corrections
+
+- Removed an accidentally misplaced `previous_location` formatting argument
+  that disabled inventory reconciliation.
+- Passed `previous_location` to the situation-resolution prompt at its intended
+  call site.
+- Observation-title transition candidates no longer count by themselves as
+  movement evidence. Titleless non-movement actions therefore retain the
+  current room, while direction commands and semantically movement-shaped
+  commands such as `enter window` remain eligible for arrival resolution.
+- Situation resolution now uses the last confirmed room while destination
+  identity is uncertain.
+- Pure-rejection world-state skips report no forced extraction.
+- Added real `LLMClient` prompt-format smoke coverage and production-shaped
+  phantom-sibling/non-cardinal-transition regression tests.
+
+Validation result after review fixes: 164 tests passed.
+
 ## 2026-07-30: transit, identity, and arrival-world-state patch
 
 Created from

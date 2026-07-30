@@ -761,9 +761,8 @@ class LPLHAgent:
                 "world_state_extraction",
                 "skipped_pure_rejection",
             )
-            world_state_extraction["forced_reason"] = (
-                arrival_world_state_force_reason
-            )
+            world_state_extraction["forced"] = False
+            world_state_extraction["forced_reason"] = ""
         else:
             world_state_extraction = self._apply_gate_world_state_update(
                 auxiliary_gate=auxiliary_gate,
@@ -2128,11 +2127,21 @@ class LPLHAgent:
         transition_candidate = (
             (auxiliary_gate or {}).get("action_transition_candidate", {}) or {}
         )
+        candidate_source = (
+            self._clean_text(transition_candidate.get("source", ""))
+            if isinstance(transition_candidate, dict) else ""
+        )
+        action_valid = (auxiliary_gate or {}).get("action_valid")
+        command_accepted = command_status == "accepted"
+        action_shape_supports_movement = self._is_location_change_action(
+            action,
+            action_valid is True or command_accepted,
+        )
         has_positive_movement_evidence = bool(
-            moved == "yes"
-            or movement_override
+            movement_override
             or direction
-            or transition_candidate
+            or candidate_source == "kg_location_change"
+            or action_shape_supports_movement
         )
         if (
             gate_ok
@@ -5794,7 +5803,11 @@ class LPLHAgent:
                                    action_valid, prev_location: str,
                                    environmental_change: dict = None) -> dict:
         """Ask the aux LLM whether any active stored situation is now solved."""
-        current_location = self._effective_location()
+        current_location = (
+            self.kg_map.current_location or "unknown"
+            if self.kg_map.location_uncertain
+            else self._effective_location()
+        )
         visible_objects = self._visible_objects_for_location(current_location)
         active_before = self.situation_memory.active_situations(
             inventory=list(self.kg_map.inventory),

@@ -179,6 +179,83 @@ class LLMTextLocationTests(unittest.TestCase):
         self.assertFalse(result["resolver_invoked"])
         self.assertEqual(agent.llm.calls, 0)
 
+    def test_observation_title_candidate_cannot_mint_phantom_after_take(self):
+        agent = self._agent()
+        self._seed(
+            agent,
+            "Attic",
+            "Attic\nA narrow attic containing an egg.",
+        )
+        sibling, _ = agent.kg_map.mint_room(
+            "Attic",
+            "Attic\nA narrow attic after the egg was removed.",
+            epoch=1,
+        )
+        agent.kg_map.confirm_arrival(
+            sibling,
+            "Attic\nA narrow attic after the egg was removed.",
+        )
+        gate = self._gate("unclear", "")
+        gate["action_valid"] = True
+        gate["action_transition_candidate"] = {
+            "from": sibling,
+            "command": "take egg",
+            "to": "Attic",
+            "source": "observation_room_title",
+        }
+
+        result = agent._resolve_step_location(
+            gate,
+            "take egg",
+            "Taken.",
+            "Attic\nA narrow attic. The egg is gone.",
+            sibling,
+            False,
+        )
+
+        self.assertEqual(agent.kg_map.current_location, sibling)
+        self.assertEqual(
+            result["action_transition_status"],
+            "titleless_unclear_nonmovement_retained",
+        )
+        self.assertEqual(
+            len(agent.kg_map.room_candidates("Attic")),
+            2,
+        )
+        self.assertEqual(agent.llm.calls, 0)
+
+    def test_titleless_unclear_noncardinal_movement_is_preserved(self):
+        agent = self._agent()
+        behind = self._seed(
+            agent,
+            "Behind House",
+            "Behind House\nAn open window leads inside.",
+        )
+        gate = self._gate("unclear", "")
+        gate["action_valid"] = True
+        gate["action_transition_candidate"] = {
+            "from": behind,
+            "command": "enter window",
+            "to": "Kitchen",
+            "source": "observation_room_title",
+        }
+
+        result = agent._resolve_step_location(
+            gate,
+            "enter window",
+            "Kitchen\nA table stands in the room.",
+            "",
+            behind,
+            False,
+        )
+
+        self.assertEqual(agent.kg_map.current_location, "Kitchen")
+        self.assertNotEqual(
+            result["action_transition_status"],
+            "titleless_unclear_nonmovement_retained",
+        )
+        self.assertEqual(agent.llm.calls, 0)
+
     def test_movement_override_respects_rejection_and_command_shape(self):
         agent = self._agent()
         start = self._seed(agent, "Hallway", "Hallway\nA red corridor.")
