@@ -2076,6 +2076,7 @@ class LPLHAgent:
             "room_split": {},
             "use_legacy_location_pipeline": False,
             "movement_override": movement_override,
+            "resolver_skipped_reason": "",
         }
         if not config.AUX_GATE_LOCATION_VERDICT:
             return result
@@ -2133,9 +2134,16 @@ class LPLHAgent:
         )
         action_valid = (auxiliary_gate or {}).get("action_valid")
         command_accepted = command_status == "accepted"
+        movement_outcome_compatible = bool(
+            command_accepted
+            or (
+                action_valid is True
+                and command_status in {"", "unknown"}
+            )
+        )
         action_shape_supports_movement = self._is_location_change_action(
             action,
-            action_valid is True or command_accepted,
+            movement_outcome_compatible,
         )
         has_positive_movement_evidence = bool(
             movement_override

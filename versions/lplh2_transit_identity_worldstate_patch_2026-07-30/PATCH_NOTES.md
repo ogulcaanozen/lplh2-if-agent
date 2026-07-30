@@ -1,5 +1,14 @@
 # LPLH2 Grounding Consistency Patch
 
+## 2026-07-30: re-review correction
+
+- Movement-shaped commands no longer bypass titleless non-movement retention
+  when the auxiliary outcome is `rejected` or `no_effect`, even if the FM
+  labelled the parser form valid.
+- The location-resolution log now always initializes
+  `resolver_skipped_reason`.
+- Added regression coverage for both conflicting outcome classes.
+
 ## 2026-07-30: static-review corrections
 
 - Removed an accidentally misplaced `previous_location` formatting argument

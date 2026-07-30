@@ -256,6 +256,54 @@ class LLMTextLocationTests(unittest.TestCase):
         )
         self.assertEqual(agent.llm.calls, 0)
 
+    def test_rejected_or_no_effect_movement_shape_cannot_bypass_guard(self):
+        for outcome_status in ("rejected", "no_effect"):
+            with self.subTest(outcome_status=outcome_status):
+                agent = self._agent()
+                self._seed(
+                    agent,
+                    "Attic",
+                    "Attic\nA narrow attic containing an egg.",
+                )
+                sibling, _ = agent.kg_map.mint_room(
+                    "Attic",
+                    "Attic\nA narrow attic after the egg was removed.",
+                    epoch=1,
+                )
+                agent.kg_map.confirm_arrival(
+                    sibling,
+                    "Attic\nA narrow attic after the egg was removed.",
+                )
+                gate = self._gate("unclear", "")
+                gate["action_valid"] = True
+                gate["decision"]["command_outcome"]["status"] = outcome_status
+                gate["action_transition_candidate"] = {
+                    "from": sibling,
+                    "command": "climb tree",
+                    "to": "Attic",
+                    "source": "observation_room_title",
+                }
+
+                result = agent._resolve_step_location(
+                    gate,
+                    "climb tree",
+                    "You cannot climb any higher.",
+                    "Attic\nA narrow attic. The egg is gone.",
+                    sibling,
+                    False,
+                )
+
+                self.assertEqual(agent.kg_map.current_location, sibling)
+                self.assertEqual(
+                    result["action_transition_status"],
+                    "titleless_unclear_nonmovement_retained",
+                )
+                self.assertEqual(
+                    len(agent.kg_map.room_candidates("Attic")),
+                    2,
+                )
+                self.assertEqual(agent.llm.calls, 0)
+
     def test_movement_override_respects_rejection_and_command_shape(self):
         agent = self._agent()
         start = self._seed(agent, "Hallway", "Hallway\nA red corridor.")
