@@ -138,9 +138,9 @@ class InteractionStats:
         information_gains = int(record.get("information_gains", 0))
         score = int(record.get("score_gained", 0))
         no_progress_count = len(record.get("no_progress_commands", set()))
-        established_progress = bool(
-            score > 0 or state_changes > 0 or information_gains > 0
-        )
+        # New information resets the no-progress streak when it occurs, but it
+        # must not make the object permanently immune to later exhaustion.
+        established_progress = bool(score > 0 or state_changes > 0)
         exhausted = (
             not established_progress
             and (

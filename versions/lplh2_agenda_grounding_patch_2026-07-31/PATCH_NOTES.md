@@ -1,5 +1,22 @@
 # LPLH2 Agenda Grounding Patch
 
+## 2026-07-31: static-review corrections
+
+- New information now resets the distinct no-progress streak without granting
+  permanent immunity from later exhaustion. Score and lasting state changes
+  remain durable evidence of productivity.
+- Ungrounded condition ideas now sort after grounded `FRESH`, `REOPENED`, and
+  `COVERED` object ideas, but before `EXHAUSTED` object ideas.
+- Valid preparation entries are ranked and audited by their grounded resource,
+  rather than inheriting the tier of the obstacle that resource may address.
+- Extracted the complete target-resolution and recording path into a testable
+  integration helper.
+- Added regression coverage for parser-rejected recording, moved-action
+  exclusion, repeated-command counting, information-streak reset, ungrounded
+  ordering, and intentional preparation-based reopening.
+
+Validation result after review fixes: 179 tests passed.
+
 ## 2026-07-31: grounded preparation and object futility
 
 Created from
@@ -25,7 +42,7 @@ python -m compileall -q lplh2
 python -m unittest discover -s lplh2 -t . -p "test_*.py"
 ```
 
-Result: 174 tests passed.
+Initial result: 174 tests passed.
 
 ## 2026-07-30: re-review correction
 

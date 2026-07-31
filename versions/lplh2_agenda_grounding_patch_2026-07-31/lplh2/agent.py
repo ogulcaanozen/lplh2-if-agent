@@ -1669,60 +1669,16 @@ class LPLHAgent:
             })
             self._recent_outcomes = self._recent_outcomes[-8:]
 
-        interaction_stats_detail = {
-            "status": "not_applicable",
-            "registry_room_id": "",
-            "object_noun": "",
-            "target_source": "none",
-            "target_candidates": [],
-            "record": {},
-        }
-        target_resolution = self._interaction_target_for_command(
-            command=completed_action,
+        interaction_stats_detail = self._record_interaction_outcome(
+            completed_action=completed_action,
             source_generation=source_generation,
             action_split=action_split,
             inventory_before=inventory_before,
+            source_memory_location=source_memory_location,
+            attempt_ledger_detail=attempt_ledger_detail,
+            reward_change=reward_change,
+            observation=observation,
         )
-        object_noun = target_resolution.get("object_noun", "")
-        registry_room_id = self.kg_map.registry_id_for(source_memory_location)
-        bare_direction = normalize_command_key(completed_action) in {
-            "north", "south", "east", "west", "northeast", "northwest",
-            "southeast", "southwest", "up", "down",
-        }
-        if (
-            attempt_ledger_detail.get("status") == "recorded"
-            and registry_room_id
-            and object_noun
-            and attempt_ledger_detail.get("outcome_class") != "moved"
-            and not bare_direction
-        ):
-            interaction_stats_detail["status"] = "recorded"
-            interaction_stats_detail["registry_room_id"] = registry_room_id
-            interaction_stats_detail["object_noun"] = object_noun
-            interaction_stats_detail["target_source"] = target_resolution.get(
-                "source", "none"
-            )
-            interaction_stats_detail["target_candidates"] = (
-                target_resolution.get("candidates", [])
-            )
-            interaction_stats_detail["record"] = self.interaction_stats.record(
-                registry_room_id=registry_room_id,
-                object_noun=object_noun,
-                command=completed_action,
-                outcome_class=attempt_ledger_detail.get("outcome_class", ""),
-                reward_change=reward_change,
-                epoch=self.current_epoch,
-                observation=observation,
-            )
-        elif object_noun:
-            interaction_stats_detail["status"] = "target_resolved_not_recorded"
-            interaction_stats_detail["object_noun"] = object_noun
-            interaction_stats_detail["target_source"] = target_resolution.get(
-                "source", "none"
-            )
-            interaction_stats_detail["target_candidates"] = (
-                target_resolution.get("candidates", [])
-            )
         detail["modules"]["interaction_stats"] = interaction_stats_detail
 
         route_hop_feedback = []
@@ -4421,6 +4377,69 @@ class LPLHAgent:
             "source": "none",
             "candidates": candidates,
         }
+
+    def _record_interaction_outcome(self, completed_action: str,
+                                    source_generation: dict, action_split,
+                                    inventory_before: set,
+                                    source_memory_location: str,
+                                    attempt_ledger_detail: dict,
+                                    reward_change: int,
+                                    observation: str) -> dict:
+        """Resolve and record one grounded non-movement object interaction."""
+        detail = {
+            "status": "not_applicable",
+            "registry_room_id": "",
+            "object_noun": "",
+            "target_source": "none",
+            "target_candidates": [],
+            "record": {},
+        }
+        target = self._interaction_target_for_command(
+            command=completed_action,
+            source_generation=source_generation,
+            action_split=action_split,
+            inventory_before=inventory_before,
+        )
+        object_noun = target.get("object_noun", "")
+        registry_room_id = self.kg_map.registry_id_for(source_memory_location)
+        bare_direction = normalize_command_key(completed_action) in {
+            "north", "south", "east", "west", "northeast", "northwest",
+            "southeast", "southwest", "up", "down",
+        }
+        should_record = (
+            attempt_ledger_detail.get("status") == "recorded"
+            and registry_room_id
+            and object_noun
+            and attempt_ledger_detail.get("outcome_class") != "moved"
+            and not bare_direction
+        )
+        if should_record:
+            detail.update({
+                "status": "recorded",
+                "registry_room_id": registry_room_id,
+                "object_noun": object_noun,
+                "target_source": target.get("source", "none"),
+                "target_candidates": target.get("candidates", []),
+                "record": self.interaction_stats.record(
+                    registry_room_id=registry_room_id,
+                    object_noun=object_noun,
+                    command=completed_action,
+                    outcome_class=attempt_ledger_detail.get(
+                        "outcome_class", ""
+                    ),
+                    reward_change=reward_change,
+                    epoch=self.current_epoch,
+                    observation=observation,
+                ),
+            })
+        elif object_noun:
+            detail.update({
+                "status": "target_resolved_not_recorded",
+                "object_noun": object_noun,
+                "target_source": target.get("source", "none"),
+                "target_candidates": target.get("candidates", []),
+            })
+        return detail
 
     def _agenda_selection_audit(self, command: str,
                                 affordance_agenda: list) -> dict:

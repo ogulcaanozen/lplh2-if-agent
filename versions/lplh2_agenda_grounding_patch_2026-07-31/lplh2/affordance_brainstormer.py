@@ -599,9 +599,23 @@ class AffordanceBrainstormer:
                     entry["preparation_for"] = idea.get("preparation_for")
                     entry["preparation_resource"] = validation["resource"]
                     entry["agenda_type"] = "PREPARATION"
-                    if not entry.get("target_object"):
-                        entry["target_object"] = validation["resource"]
-                        entry["target_grounded"] = True
+                    # Preparation is ranked and audited by the resource being
+                    # established, not by the obstacle it may later address.
+                    entry["target_object"] = validation["resource"]
+                    entry["target_grounded"] = True
+                    entry.pop("object_tier", None)
+                    entry.pop("object_attempts", None)
+                    resource_tier = self._tier_for_target(
+                        validation["resource"],
+                        object_tiers,
+                    )
+                    if resource_tier:
+                        entry["object_tier"] = resource_tier.get(
+                            "tier", "FRESH"
+                        )
+                        entry["object_attempts"] = int(
+                            resource_tier.get("attempts", 0) or 0
+                        )
             if idea.get("reason"):
                 entry["reason"] = idea.get("reason", "")
             tried_count = len(command_statuses)
@@ -620,11 +634,15 @@ class AffordanceBrainstormer:
             "FRESH": 0,
             "REOPENED": 1,
             "COVERED": 2,
-            "EXHAUSTED": 3,
+            "UNGROUNDED": 3,
+            "EXHAUSTED": 4,
         }
         agenda.sort(key=lambda item: (
             not bool(item.get("preparation_for")),
-            tier_order.get(item.get("object_tier", "FRESH"), 0),
+            tier_order.get(
+                item.get("object_tier", "UNGROUNDED"),
+                tier_order["UNGROUNDED"],
+            ),
             item.get("agenda_status") == "all_commands_tried",
             item.get("agenda_status") == "partly_tried",
         ))
