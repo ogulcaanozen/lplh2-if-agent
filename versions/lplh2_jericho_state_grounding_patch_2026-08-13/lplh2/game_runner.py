@@ -237,6 +237,9 @@ class GameRunner:
         self.num_epochs = num_epochs or config.NUM_EPOCHS
         self.max_steps = max_steps or config.MAX_STEPS_PER_EPOCH
         self.verbose = verbose
+        self.notebook_live_output_steps = max(
+            0, int(getattr(config, "NOTEBOOK_LIVE_OUTPUT_STEPS", 0) or 0)
+        )
 
         # Results tracking
         self.epoch_results = []
@@ -701,6 +704,12 @@ class GameRunner:
         max_score = score
 
         if self.verbose:
+            if epoch > 1:
+                self._clear_notebook_live_output(
+                    epoch=epoch,
+                    next_step=1,
+                    reason="new epoch",
+                )
             print(f"\n{'='*70}")
             print(f"  EPOCH {epoch}")
             print(f"{'='*70}")
@@ -757,6 +766,12 @@ class GameRunner:
 
             # ── Live console output ───────────────────────────
             if self.verbose:
+                if self._should_roll_notebook_output(step):
+                    self._clear_notebook_live_output(
+                        epoch=epoch,
+                        next_step=step,
+                        reason="rolling step window",
+                    )
                 self._print_step_detail(agent, step, action, observation, score, reward)
             self._log_step(epoch, step, action, observation, score, reward, agent)
             if self._current_epoch_log is not None:
@@ -795,6 +810,44 @@ class GameRunner:
         }
 
         return epoch_result, step_details
+
+    def _should_roll_notebook_output(self, step: int) -> bool:
+        """Return whether this step starts a fresh notebook output window."""
+        window = int(getattr(self, "notebook_live_output_steps", 0) or 0)
+        return window > 0 and step > 1 and (step - 1) % window == 0
+
+    def _clear_notebook_live_output(self, epoch: int, next_step: int,
+                                    reason: str) -> bool:
+        """Clear accumulated IPython output without touching persistent logs."""
+        if int(getattr(self, "notebook_live_output_steps", 0) or 0) <= 0:
+            return False
+        try:
+            from IPython import get_ipython
+            from IPython.display import clear_output
+
+            if get_ipython() is None:
+                return False
+            clear_output(wait=True)
+        except Exception:
+            return False
+
+        print("=" * 70)
+        print(
+            f"  Live display refreshed ({reason}) | "
+            f"Epoch {epoch}/{self.num_epochs} | Next step: {next_step}"
+        )
+        if self.epoch_results:
+            previous = self.epoch_results[-1]
+            print(
+                f"  Previous epoch: {previous.get('epoch', '?')} | "
+                f"Score: {previous.get('final_score', '?')}"
+            )
+        print(
+            f"  Showing at most {self.notebook_live_output_steps} recent steps."
+        )
+        print(f"  Complete logs continue at: {self._experiment_log_dir}")
+        print("=" * 70, flush=True)
+        return True
 
     def _print_step_detail(self, agent: LPLHAgent, step: int, action: str,
                             observation: str, score: int, reward: int):
