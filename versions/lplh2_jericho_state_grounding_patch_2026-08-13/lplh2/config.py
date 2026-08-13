@@ -7,7 +7,7 @@ NUM_EPOCHS = 2
 MAX_STEPS_PER_EPOCH = 250
 HISTORY_LENGTH = 10  # last N turns kept in context
 NOTEBOOK_LIVE_OUTPUT_STEPS = max(
-    0, int(os.getenv("LPLH_NOTEBOOK_LIVE_OUTPUT_STEPS", "0"))
+    0, int(os.getenv("LPLH_NOTEBOOK_LIVE_OUTPUT_STEPS", "25"))
 )
 
 # LLM_a settings: action generation
