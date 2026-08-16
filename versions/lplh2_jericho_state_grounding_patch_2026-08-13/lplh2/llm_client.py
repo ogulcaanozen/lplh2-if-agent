@@ -2,7 +2,7 @@
 
 Providers:
   - "ollama"      : local, free
-  - "huggingface" : in-process (Colab / GPU box), for paper-faithful Qwen2.5-7B
+  - "huggingface" : in-process (Colab / GPU box), including Qwen2.5 and Qwen3.x
   - "openai"      : API, for GPT-o3-mini etc.
 
 The 3 fm tasks (validate_action, extract_relations, split_action) live in
@@ -42,10 +42,15 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """LLM client for action generation + experience summarization."""
 
-    def __init__(self, provider=None, model=None, temperature=None):
+    def __init__(self, provider=None, model=None, temperature=None,
+                 load_in_8bit: bool = False,
+                 default_max_new_tokens: int = None):
         self.provider = provider or config.LLM_PROVIDER
         self.model = model or config.LLM_MODEL
         self.temperature = temperature if temperature is not None else config.LLM_TEMPERATURE
+        self.load_in_8bit = bool(load_in_8bit)
+        self.default_max_new_tokens = default_max_new_tokens
+        self._aux_fallback_client = None
 
         if self.provider == "ollama":
             import ollama
@@ -155,23 +160,72 @@ class LLMClient:
 
     def _setup_huggingface(self):
         import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
         self._torch = torch
         self._hf_device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = (torch.bfloat16
                  if (self._hf_device == "cuda" and torch.cuda.is_bf16_supported())
                  else torch.float16)
-        logger.info(f"Loading HF model {self.model} on {self._hf_device} ({dtype})")
-        self._hf_tokenizer = AutoTokenizer.from_pretrained(self.model, trust_remote_code=True)
-        if self._hf_tokenizer.pad_token is None:
-            self._hf_tokenizer.pad_token = self._hf_tokenizer.eos_token
-        self._hf_model = AutoModelForCausalLM.from_pretrained(
-            self.model, dtype=dtype, device_map="auto", trust_remote_code=True,
+        hf_config = AutoConfig.from_pretrained(self.model, trust_remote_code=True)
+        self._hf_multimodal = bool(getattr(hf_config, "vision_config", None))
+        logger.info(
+            "Loading HF model %s on %s (%s, multimodal=%s, int8=%s)",
+            self.model,
+            self._hf_device,
+            dtype,
+            self._hf_multimodal,
+            self.load_in_8bit,
         )
+
+        if self._hf_multimodal:
+            try:
+                from transformers import AutoProcessor, AutoModelForMultimodalLM
+            except ImportError as exc:
+                raise RuntimeError(
+                    f"{self.model} requires the latest Hugging Face transformers "
+                    "with AutoModelForMultimodalLM support."
+                ) from exc
+            self._hf_tokenizer = AutoProcessor.from_pretrained(
+                self.model,
+                trust_remote_code=True,
+            )
+            model_class = AutoModelForMultimodalLM
+        else:
+            self._hf_tokenizer = AutoTokenizer.from_pretrained(
+                self.model,
+                trust_remote_code=True,
+            )
+            model_class = AutoModelForCausalLM
+
+        tokenizer = getattr(self._hf_tokenizer, "tokenizer", self._hf_tokenizer)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model_kwargs = {
+            "dtype": dtype,
+            "device_map": {"": 0} if self._hf_device == "cuda" else "auto",
+            "trust_remote_code": True,
+        }
+        if self.load_in_8bit:
+            if self._hf_device != "cuda":
+                raise RuntimeError("8-bit Hugging Face loading requires a CUDA GPU.")
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError as exc:
+                raise RuntimeError(
+                    "8-bit Hugging Face loading requires bitsandbytes."
+                ) from exc
+            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_8bit=True,
+            )
+
+        self._hf_model = model_class.from_pretrained(self.model, **model_kwargs)
         self._hf_model.eval()
 
     def _probe_thinking_support(self) -> bool:
+        if self.provider == "huggingface":
+            return "qwen3" in (self.model or "").lower()
         if self.provider != "ollama":
             return False
         try:
@@ -194,7 +248,7 @@ class LLMClient:
                 max_new_tokens=max_new_tokens,
             )
         if self.provider == "huggingface":
-            return self._chat_hf(system_prompt, user_prompt, temp,
+            return self._chat_hf(system_prompt, user_prompt, temp, think=think,
                                  max_new_tokens=max_new_tokens)
         if self.provider == "openai":
             return self._chat_openai(system_prompt, user_prompt, temp,
@@ -218,31 +272,55 @@ class LLMClient:
         )
         return response["message"]["content"]
 
-    def _chat_hf(self, system_prompt, user_prompt, temperature,
+    def _chat_hf(self, system_prompt, user_prompt, temperature, think=False,
                  max_new_tokens=None):
         torch = self._torch
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
-        text = self._hf_tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-        inputs = self._hf_tokenizer(text, return_tensors="pt").to(self._hf_device)
+        template_kwargs = {}
+        if self._thinking_supported:
+            template_kwargs["enable_thinking"] = bool(think)
+        if self._hf_multimodal:
+            inputs = self._hf_tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+                **template_kwargs,
+            ).to(self._hf_model.device)
+        else:
+            text = self._hf_tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                **template_kwargs,
+            )
+            inputs = self._hf_tokenizer(
+                text,
+                return_tensors="pt",
+            ).to(self._hf_model.device)
+        tokenizer = getattr(self._hf_tokenizer, "tokenizer", self._hf_tokenizer)
         # Only pass sampling kwargs when we are actually sampling, otherwise
         # transformers emits a "temperature is ignored under greedy decoding"
         # warning every call.
         gen_kwargs = {
-            "max_new_tokens": int(max_new_tokens or 1024),
+            "max_new_tokens": int(
+                max_new_tokens or self.default_max_new_tokens or 1024
+            ),
             "do_sample": temperature > 0,
-            "pad_token_id": self._hf_tokenizer.pad_token_id,
+            "pad_token_id": tokenizer.pad_token_id,
         }
         if temperature > 0:
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = 0.95
+            if self._thinking_supported:
+                gen_kwargs["top_k"] = 20
         with torch.no_grad():
             out = self._hf_model.generate(**inputs, **gen_kwargs)
-        gen_ids = out[0][inputs.input_ids.shape[1]:]
+        gen_ids = out[0][inputs["input_ids"].shape[1]:]
         return self._hf_tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
     def _chat_openai(self, system_prompt, user_prompt, temperature,
@@ -273,13 +351,20 @@ class LLMClient:
         return model_name.startswith(("o1", "o3", "o4"))
 
     def _chat_aux_fallback(self, prompt: str, max_new_tokens: int) -> str:
-        """Run auxiliary work on LLM_a with deterministic decoding."""
-        return self.chat(
+        """Run auxiliary work on the configured local fallback deterministically."""
+        client = self._aux_fallback_client or self
+        return client.chat(
             "",
             prompt,
             temperature=0.0,
             max_new_tokens=max_new_tokens,
         )
+
+    def set_auxiliary_client(self, client) -> None:
+        """Route local auxiliary passes through a separate LLM client."""
+        if client is self:
+            raise ValueError("The auxiliary client must be a separate LLMClient instance.")
+        self._aux_fallback_client = client
 
     def _chat_es_once(self, prompt: str, max_completion_tokens: int) -> tuple[str, str]:
         """Run one OpenAI aux/summarization call and return visible text + finish reason."""
