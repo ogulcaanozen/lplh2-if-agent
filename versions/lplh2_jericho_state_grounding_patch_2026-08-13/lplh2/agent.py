@@ -46,6 +46,21 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
+_FATAL_LLM_BACKEND_MARKERS = (
+    "enginecore encountered an issue",
+    "engine core exited",
+    "cuda out of memory",
+    "outofmemoryerror",
+    "illegal memory access",
+    "device-side assert",
+)
+
+
+def _is_fatal_llm_backend_error(error) -> bool:
+    message = str(error or "").lower()
+    return any(marker in message for marker in _FATAL_LLM_BACKEND_MARKERS)
+
+
 class LPLHAgent:
     """LPLH Agent for playing Interactive Fiction games.
 
@@ -3086,6 +3101,10 @@ class LPLHAgent:
                 print("  Initial action generation: main LLM returned.", flush=True)
         except Exception as e:
             err_str = str(e).lower()
+            if _is_fatal_llm_backend_error(e):
+                raise RuntimeError(
+                    f"Main LLM backend failed and cannot safely continue: {e}"
+                ) from e
             if any(x in err_str for x in ["connect", "refused", "unreachable", "failed to connect"]):
                 raise RuntimeError(f"Ollama server unreachable: {e}") from e
             logger.error(f"Action generation failed: {e}")
