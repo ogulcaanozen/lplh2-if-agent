@@ -12,6 +12,7 @@ LLM_a doing double-duty.
 """
 
 import re
+import os
 import json
 import logging
 
@@ -167,7 +168,13 @@ class LLMClient:
         dtype = (torch.bfloat16
                  if (self._hf_device == "cuda" and torch.cuda.is_bf16_supported())
                  else torch.float16)
-        hf_config = AutoConfig.from_pretrained(self.model, trust_remote_code=True)
+        cache_dir = os.getenv("HUGGINGFACE_HUB_CACHE") or None
+        download_kwargs = {
+            "trust_remote_code": True,
+        }
+        if cache_dir:
+            download_kwargs["cache_dir"] = cache_dir
+        hf_config = AutoConfig.from_pretrained(self.model, **download_kwargs)
         self._hf_multimodal = bool(getattr(hf_config, "vision_config", None))
         logger.info(
             "Loading HF model %s on %s (%s, multimodal=%s, int8=%s)",
@@ -188,13 +195,13 @@ class LLMClient:
                 ) from exc
             self._hf_tokenizer = AutoProcessor.from_pretrained(
                 self.model,
-                trust_remote_code=True,
+                **download_kwargs,
             )
             model_class = AutoModelForMultimodalLM
         else:
             self._hf_tokenizer = AutoTokenizer.from_pretrained(
                 self.model,
-                trust_remote_code=True,
+                **download_kwargs,
             )
             model_class = AutoModelForCausalLM
 
@@ -207,6 +214,8 @@ class LLMClient:
             "device_map": {"": 0} if self._hf_device == "cuda" else "auto",
             "trust_remote_code": True,
         }
+        if cache_dir:
+            model_kwargs["cache_dir"] = cache_dir
         if self.load_in_8bit:
             if self._hf_device != "cuda":
                 raise RuntimeError("8-bit Hugging Face loading requires a CUDA GPU.")
